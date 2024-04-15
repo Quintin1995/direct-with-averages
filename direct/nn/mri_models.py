@@ -741,6 +741,7 @@ class MRIModelEngine(Engine):
         regularizer_fns: Optional[Dict[str, Callable]] = None,
         add_target: bool = True,
         crop: Optional[str] = None,
+        add_sampling_mask: bool = False,
     ):
         """Validation process. Assumes that each batch only contains slices of the same volume *AND* that these are
         sequentially ordered.
@@ -754,6 +755,8 @@ class MRIModelEngine(Engine):
             If true, will add the target to the output
         crop: str, optional
             Crop type.
+        add_sampling_mask: bool
+            If true, will add the sampling mask to the output
 
         Yields
         ------
@@ -777,6 +780,7 @@ class MRIModelEngine(Engine):
         last_filename = None  # At the start of evaluation, there are no filenames.
         curr_volume = None
         curr_target = None
+        curr_samp_mask = None        # QVL - lets store the sampling mask
         slice_counter = 0
         filenames_seen = 0
 
@@ -800,10 +804,13 @@ class MRIModelEngine(Engine):
                 last_filename = filename
 
             scaling_factors = data["scaling_factor"].clone()
-            resolution = _compute_resolution(
-                key=crop,
-                reconstruction_size=data.get("reconstruction_size", None),
-            )
+            
+            if False:   # QVL
+                resolution = _compute_resolution(
+                    key=crop,
+                    reconstruction_size=data.get("reconstruction_size", None),
+                )
+            
             # Compute output
             iteration_output = self._do_iteration(data, loss_fns=loss_fns, regularizer_fns=regularizer_fns)
             output = iteration_output.output_image
@@ -813,7 +820,7 @@ class MRIModelEngine(Engine):
             output_abs = _process_output(
                 output,
                 scaling_factors,
-                resolution=resolution,
+                resolution=None,
                 complex_axis=self._complex_dim,
             )
 
@@ -821,8 +828,16 @@ class MRIModelEngine(Engine):
                 target_abs = _process_output(
                     data["target"],
                     scaling_factors,
-                    resolution=resolution,
+                    resolution=None,
                     complex_axis=self._complex_dim,
+                )
+                
+            if add_sampling_mask:   # qvl - the sampling mask is does not need cropping, modulus or scaling but only a dim must be added
+                samp_mask_abs = _process_output(
+                    data["sampling_mask"],
+                    scaling_factors = None,
+                    resolution      = None,    #  QVL - I want to make the reconstructions DICOM-like, then we cannot do any cropping here.
+                    complex_axis    = self._complex_dim,
                 )
 
             if curr_volume is None:
@@ -831,10 +846,14 @@ class MRIModelEngine(Engine):
                 loss_dict_list.append(loss_dict)
                 if add_target:
                     curr_target = curr_volume.clone()
+                if add_sampling_mask:
+                    curr_samp_mask = torch.zeros(*(volume_size, *samp_mask_abs.shape[1:]), dtype=samp_mask_abs.dtype)
 
             curr_volume[slice_counter : slice_counter + output_abs.shape[0], ...] = output_abs.cpu()
             if add_target:
                 curr_target[slice_counter : slice_counter + output_abs.shape[0], ...] = target_abs.cpu()  # type: ignore
+            if add_sampling_mask:
+                curr_samp_mask[slice_counter : slice_counter + output_abs.shape[0], ...] = samp_mask_abs.cpu() # type: ignore
 
             slice_counter += output_abs.shape[0]
 

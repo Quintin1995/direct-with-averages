@@ -33,6 +33,7 @@ __all__ = [
     "ConcatDataset",
     "CMRxReconDataset",
     "FastMRIDataset",
+    "FastMRIAvgCombDataset",
     "FakeMRIBlobsDataset",
     "SheppLoganDataset",
     "SheppLoganT1Dataset",
@@ -434,6 +435,158 @@ class FastMRIDataset(H5SliceData):
             mask = np.broadcast_to(mask, [kspace_shape[2], mask.shape[-1]])
             mask = mask[np.newaxis, np.newaxis, ..., np.newaxis]
         return mask
+
+
+class FastMRIAvgCombDataset(H5WithAvgsSliceData):
+    """FastMRI challenge dataset.
+       However, this class assumes that the averages are at the first axis of the kspace.
+       Like the prostate NYU dataset with 3 averages as the first dimension.
+       
+       Combine the three averages by taking the average of avg1 and avg3 (odd lines) and adding avg2 (even lines)
+       full_kspace = (avg1 + avg3) / 2 + avg2
+    """
+    def __init__(
+        self,
+        data_root: pathlib.Path,
+        transform: Optional[Callable] = None,
+        filenames_filter: Optional[List[PathOrString]] = None,
+        filenames_lists: Union[List[PathOrString], None] = None,
+        filenames_lists_root: Union[PathOrString, None] = None,
+        regex_filter: Optional[str] = None,
+        pass_mask: bool = False,
+        pass_max: bool = True,
+        initial_images: Union[List[pathlib.Path], None] = None,
+        initial_images_key: Optional[str] = None,
+        noise_data: Optional[Dict] = None,
+        pass_h5s: Optional[Dict] = None,
+        compute_mask: bool = True,         # QVL set to True to compute the mask from the data
+        store_applied_acs_mask: bool = False,
+        avg_collapse_strat: str = "allavg",
+        **kwargs,
+    ) -> None:
+        # TODO: Clean up Dataset class such that only **kwargs need to get parsed.
+        # BODY: Additional keysneeded for this dataset can be popped if needed.
+        self.pass_mask = pass_mask
+        extra_keys = ["mask"] if pass_mask else []
+        extra_keys.append("ismrmrd_header")
+        
+        # print(f"QVL - extra_keys: {extra_keys}") if DEBUG else None
+        # print(f"self.pass_mask: {self.pass_mask}") if DEBUG else None
+
+        super().__init__(
+            root=data_root,
+            filenames_filter=filenames_filter,
+            filenames_lists=filenames_lists,
+            filenames_lists_root=filenames_lists_root,
+            regex_filter=regex_filter,
+            metadata=None,
+            extra_keys=tuple(extra_keys),
+            pass_attrs=pass_max,
+            text_description=kwargs.get("text_description", None),
+            pass_h5s=pass_h5s,
+            pass_dictionaries=kwargs.get("pass_dictionaries", None),
+            store_applied_acs_mask=store_applied_acs_mask,
+            avg_collapse_strat=avg_collapse_strat,
+        )
+        if self.sensitivity_maps is not None:
+            raise NotImplementedError(
+                f"Sensitivity maps are not supported in the current " f"{self.__class__.__name__} class."
+            )
+
+        # TODO: Make exclusive or to give error when one of the two keys is not set.
+        # TODO: Convert into mixin, and add support to main image
+        # TODO: Such a support would also work for the sensitivity maps
+        self.initial_images_key = initial_images_key
+        self.initial_images = {}
+
+        if initial_images:
+            self.initial_images = {k.name: k for k in initial_images}
+
+        self.noise_data = noise_data
+        self.transform = transform
+        self.compute_mask = compute_mask
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        sample = super().__getitem__(idx)
+
+        if self.pass_attrs:
+            sample["scaling_factor"] = sample["attrs"]["max"]
+            del sample["attrs"]
+
+        sample.update(_parse_fastmri_header(sample["ismrmrd_header"]))
+        del sample["ismrmrd_header"]
+        # Some images have strange behavior, e.g. FLAIR 203.
+        image_shape = sample["kspace"].shape
+        if image_shape[-1] < sample["reconstruction_size"][-2]:  # reconstruction size is (x, y, z)
+            sample["reconstruction_size"] = (image_shape[-1], image_shape[-1], 1)
+
+        if self.pass_mask:
+            # mask should be shape (1, h, w, 1) mask provided is only w
+            kspace_shape = sample["kspace"].shape
+            sampling_mask = sample["mask"]
+
+            # Mask needs to be padded.
+            sampling_mask[: sample["padding_left"]] = 0
+            sampling_mask[sample["padding_right"] :] = 0
+
+            sampling_mask = sampling_mask.reshape(1, -1)
+            del sample["mask"]
+
+            sample["sampling_mask"] = self.__broadcast_mask(kspace_shape, sampling_mask)
+            sample["acs_mask"] = self.__broadcast_mask(kspace_shape, self.__get_acs_from_fastmri_mask(sampling_mask))
+        
+        # QVL REGION
+        if self.compute_mask:
+            nx, ny = sample["kspace"].shape[-2:]
+            sampling_mask = np.abs(sample["kspace"]).sum(tuple(range(len(sample["kspace"].shape) - 2))) != 0
+            assert tuple(sampling_mask.shape) == (nx, ny)
+            # acs_mask = np.zeros((nx, ny), dtype=bool)
+            # acs_mask[:, ny // 2 - 51 : ny // 2 + 51] = True
+            sample["sampling_mask"] = sampling_mask[np.newaxis, ..., np.newaxis]
+            # sample["acs_mask"] = acs_mask[np.newaxis, ..., np.newaxis]
+            
+        # Explicitly zero-out the outer parts of kspace which are padded
+        sample["kspace"] = self.explicit_zero_padding(
+            sample["kspace"], sample["padding_left"], sample["padding_right"]
+        )
+
+        if self.transform:
+            sample = self.transform(sample)
+
+        if self.noise_data:
+            sample["loglikelihood_scaling"] = self.noise_data[sample["slice_no"]]
+
+        return sample
+
+    @staticmethod
+    def explicit_zero_padding(kspace, padding_left, padding_right):
+        if padding_left > 0:
+            kspace[..., 0:padding_left] = 0 + 0 * 1j
+        if padding_right > 0:
+            kspace[..., padding_right:] = 0 + 0 * 1j
+
+        return kspace
+
+    @staticmethod
+    def __get_acs_from_fastmri_mask(mask):
+        left = right = mask.shape[-1] // 2
+        while mask[..., right]:
+            right += 1
+        while mask[..., left]:
+            left -= 1
+        acs_mask = np.zeros_like(mask)
+        acs_mask[:, left + 1 : right] = 1
+        return acs_mask
+
+    def __broadcast_mask(self, kspace_shape, mask):
+        if self.ndim == 2:
+            mask = np.broadcast_to(mask, [kspace_shape[1], mask.shape[-1]])
+            mask = mask[np.newaxis, ..., np.newaxis]
+        elif self.ndim == 3:
+            mask = np.broadcast_to(mask, [kspace_shape[2], mask.shape[-1]])
+            mask = mask[np.newaxis, np.newaxis, ..., np.newaxis]
+        return mask
+
 
 
 class CMRxReconDataset(Dataset):

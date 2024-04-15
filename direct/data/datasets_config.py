@@ -100,6 +100,12 @@ class FastMRIConfig(H5SliceConfig):
 
 
 @dataclass
+class FastMRIAvgCombConfig(H5SliceConfig):
+    pass_attrs: bool = True
+    avg_acceleration: float = 1.0       # the acceleration as string based on leaving out averages with added equispaced acceleration symbolising the application of a GRAPPA factor for example
+
+
+@dataclass
 class CalgaryCampinasConfig(H5SliceConfig):
     crop_outer_slices: bool = False
 

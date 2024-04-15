@@ -886,7 +886,13 @@ class EstimateSensitivityMapModule(DirectModule):
             gaussian_mask_shape = torch.ones(len(kspace_data.shape)).int()
             gaussian_mask_shape[width_dim] = kspace_data.size(width_dim)
             gaussian_mask = gaussian_mask.reshape(tuple(gaussian_mask_shape))
-            kspace_acs = kspace_data * sample["acs_mask"] * gaussian_mask + 0.0
+            if "applied_acs_mask" in sample:
+                # print(f"QVL size of applied_acs_mask: {sample['applied_acs_mask'].size()}")
+                # print(f"QVL size of gaussian_mask: {gaussian_mask.size()}")
+                kspace_acs = sample["applied_acs_mask"] * gaussian_mask + 0.0
+                del sample["applied_acs_mask"]
+            else:
+                kspace_acs = kspace_data * sample["acs_mask"] * gaussian_mask + 0.0
 
         # Get complex-valued data solution
         # Shape (batch, [slice/time], coil, height, width, complex=2)

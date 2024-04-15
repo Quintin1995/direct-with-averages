@@ -100,6 +100,8 @@ def setup_inference_save_to_h5(
     logger.info(f"Predicting dataset and saving in: {output_directory}.")
 
     if is_validation:
+        print(f"QVL1 - Validation batch size: {env.cfg.validation.batch_size}")
+        print(f"QVL2 - Validation crop: {env.cfg.validation.crop}")
         batch_size, crop = env.cfg.validation.batch_size, env.cfg.validation.crop  # type: ignore
     else:
         batch_size, crop = env.cfg.inference.batch_size, env.cfg.inference.crop  # type: ignore
@@ -123,7 +125,11 @@ def setup_inference_save_to_h5(
         write_output_to_h5(
             output,
             output_directory,
-            output_key="reconstruction",
+            output_key          = "reconstruction",
+            # acceleration_factor = env.cfg.inference.dataset.transforms.masking.accelerations[0],
+            acceleration_factor = env.cfg.inference.dataset.avg_acceleration,
+            modelname           = str(env.cfg.model.model_name).split('.')[-1],
+            also_write_nifti    = False,
         )
 
 
