@@ -62,6 +62,17 @@ def process_directory(
     do_save_empty_ref: bool = False,
     logger: logging.Logger = None,
 ) -> None:
+    """	
+    Process the root directory and convert the specified files to mha format.
+    
+    Parameters:
+    - root_dir (Path): Root directory containing the patient directories.
+    - file_mapping (tuple): Tuple containing the source and target file names.
+    - target_base_dir (Path): Base directory where the converted files will be stored.
+    - acc (str): Acceleration factor.
+    - do_save_empty_ref (bool): Flag to save a black reference image.
+    - logger (logging.Logger): Logger instance for logging messages.
+    """
     for idx, patient_dir in enumerate(root_dir.iterdir()):
         logger.info(f"\tProcessing {idx + 1}/{len(list(root_dir.iterdir()))}: {patient_dir}")
         if not patient_dir.is_dir():
@@ -81,7 +92,7 @@ def process_directory(
                 continue
             converted_image = convert_nifti_to_mha(source_path, target_path, logger)
             
-            # Save a black reference image if needed
+            # Save a black reference image if needed 
             if do_save_empty_ref and acc == "3x" and converted_image:
                 black_image_path = target_dir / f"{id}_black_ref.mha"
                 create_and_save_black_image_like(converted_image, black_image_path)
@@ -239,7 +250,6 @@ def main():
         patient_dirs = sorted(inf_dir_1x.iterdir(), key=lambda x: x.name)
         
         for idx, pat_dir in enumerate(patient_dirs):
-            # skip if it is a file
             if not pat_dir.is_dir():
                 continue
             pat_id = pat_dir.name
@@ -250,14 +260,13 @@ def main():
                 continue
             
             try:
-                pat_dcm_dir = cfg["dataset_dir"] / pat_id / 'dicoms'            # 1. go into patient dicoms dir
-                study_dir   = get_study_dir(pat_dcm_dir, pat_id)                # 2. get the study directories
-                dwi_dirs, adc_dirs, t2_tra_dirs = find_sequence_directories(study_dir, pat_id, logger)
+                pat_dcm_dir = cfg["dataset_dir"] / pat_id / 'dicoms'                                    # 1. go into patient dicoms dir
+                study_dir   = get_study_dir(pat_dcm_dir, pat_id)                                        # 2. get the study directories
+                dwi_dirs, adc_dirs, t2_tra_dirs = find_sequence_directories(study_dir, pat_id, logger)  # 3. find the sequence directories
                 
                 # Find the corresponding nifti and convert them to mha and place them in the target dir
                 pat_nif_dir = cfg["dataset_dir"] / pat_id / 'niftis'
                 study_dir   = get_study_dir(pat_nif_dir, pat_id)
-                
                 
                 for idx, dwi_dir in enumerate(dwi_dirs):
                     source_path = pat_nif_dir / study_dir / f"{dwi_dir}.nii.gz"

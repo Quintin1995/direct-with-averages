@@ -3,136 +3,58 @@ import h5py
 import xml.etree.ElementTree as ET
 import pandas as pd
 from scipy.stats import shapiro
+from typing import List
+import logging
+import pydicom
+from datetime import datetime
 
 
 def get_configurations():
     return {
-            'dataset_root': Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data'),
-            'project_root': Path('/scratch/p290820/projects/03_nki_reader_study'),
-            'stats_root':   Path('/scratch/p290820/projects/03_nki_reader_study/stats'),
-            'inclusion_anon_ids': [
-                'ANON5046358',
-                'ANON9616598',
-                'ANON2379607',
-                'ANON8290811',
-                'ANON1586301',
-                'ANON8890538',
-                'ANON7748752',
-                'ANON1102778',
-                'ANON4982869',
-                'ANON7362087',
-                'ANON3951049',
-                'ANON9844606',
-                'ANON9843837',
-                'ANON7657657',
-                'ANON1562419',
-                'ANON4277586',
-                'ANON6964611',
-                'ANON7992094',
-                'ANON3394777',
-                'ANON3620419',
-                'ANON9724912',
-                'ANON3397001',
-                'ANON7189994',
-                'ANON9141039',
-                'ANON7649583',
-                'ANON9728185',
-                'ANON3474225',
-                'ANON0282755',
-                'ANON0369080',
-                'ANON0604912',
-                'ANON2361146',
-                'ANON9423619',
-                'ANON7041133',
-                'ANON8232550',
-                'ANON2563804',
-                'ANON3613611',
-                'ANON6365688',
-                'ANON9783006',
-                'ANON1327674',
-                'ANON9710044',
-                'ANON5517301',
-                'ANON2124757',
-                'ANON3357872',
-                'ANON1070291',
-                'ANON9719981',
-                'ANON7955208',
-                'ANON7642254',
-                'ANON0319974',
-                'ANON9972960',
-                'ANON0282398',
-                'ANON0913099',
-                'ANON7978458',
-                'ANON9840567',
-                'ANON5223499',
-                'ANON9806291',
-                'ANON5954143',
-                'ANON5895496',
-                'ANON3983890',
-                'ANON8634437',
-                'ANON6883869',
-                'ANON8828023',
-                'ANON4499321',
-                'ANON9763928',
-                'ANON9898497',
-                'ANON6073234',
-                'ANON4535412',
-                'ANON6141178',
-                'ANON8511628',
-                'ANON9534873',
-                'ANON9892116',
-                'ANON0891692',
-                'ANON9786899',
-                'ANON9941969',
-                'ANON8024204',
-                'ANON9728761',
-                'ANON4189062',
-                'ANON5642073',
-                'ANON8583296',
-                'ANON4035085',
-                'ANON7748630',
-                'ANON9883201',
-                'ANON0424679',
-                'ANON9816976',
-                'ANON8266491',
-                'ANON9310466',
-                'ANON3210850',
-                'ANON9665113',
-                'ANON0400743',
-                'ANON9223478',
-                'ANON3865800',
-                'ANON7141024',
-                'ANON7275574',
-                'ANON9629161',
-                'ANON7265874',
-                'ANON8610762',
-                'ANON0272089',
-                'ANON4747182',
-                'ANON8023509',
-                'ANON8627051',
-                'ANON5344332',
-                'ANON9879440',
-                'ANON8096961',
-                'ANON8035619',
-                'ANON1747790',
-                'ANON2666319',
-                'ANON0899488',
-                'ANON8018038',
-                'ANON7090827',
-                'ANON9752849',
-                'ANON2255419',
-                'ANON0335209',
-                'ANON7414571',
-                'ANON9604223',
-                'ANON4712664',
-                'ANON5824292',
-                'ANON2411221',
-                'ANON5958718',
-                'ANON7828652',
-                'ANON9873056',
-                'ANON3504149',
-            ]
+            'force_new_file':        False,
+            'dataset_root':          Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data'),
+            'project_root':          Path('/scratch/p290820/projects/03_nki_reader_study'),
+            "log_dir":               Path('/scratch/hb-pca-rad/qvl/logs'),
+            'stats_root':            Path('/scratch/p290820/projects/03_nki_reader_study/stats'),
+            'scan_params_out_fpath': Path('/scratch/p290820/projects/03_nki_reader_study/stats/results/acquisition_parameters_umcg.csv'),
+            'inclusion_anon_ids':    ['ANON5046358','ANON9616598','ANON2379607','ANON8290811','ANON1586301','ANON8890538','ANON7748752','ANON1102778','ANON4982869','ANON7362087','ANON3951049','ANON9844606','ANON9843837','ANON7657657','ANON1562419','ANON4277586','ANON6964611','ANON7992094','ANON3394777','ANON3620419','ANON9724912','ANON3397001','ANON7189994','ANON9141039','ANON7649583','ANON9728185','ANON3474225','ANON0282755','ANON0369080','ANON0604912','ANON2361146','ANON9423619','ANON7041133','ANON8232550','ANON2563804','ANON3613611','ANON6365688','ANON9783006','ANON1327674','ANON9710044','ANON5517301','ANON2124757','ANON3357872','ANON1070291','ANON9719981','ANON7955208','ANON7642254','ANON0319974','ANON9972960','ANON0282398','ANON0913099','ANON7978458','ANON9840567','ANON5223499','ANON9806291','ANON5954143','ANON5895496','ANON3983890','ANON8634437','ANON6883869','ANON8828023','ANON4499321','ANON9763928','ANON9898497','ANON6073234','ANON4535412','ANON6141178','ANON8511628','ANON9534873','ANON9892116','ANON0891692','ANON9786899','ANON9941969','ANON8024204','ANON9728761','ANON4189062','ANON5642073','ANON8583296','ANON4035085','ANON7748630','ANON9883201','ANON0424679','ANON9816976','ANON8266491','ANON9310466','ANON3210850','ANON9665113','ANON0400743','ANON9223478','ANON3865800','ANON7141024','ANON7275574','ANON9629161','ANON7265874','ANON8610762','ANON0272089','ANON4747182','ANON8023509','ANON8627051','ANON5344332','ANON9879440','ANON8096961','ANON8035619','ANON1747790','ANON2666319','ANON0899488','ANON8018038','ANON7090827','ANON9752849','ANON2255419','ANON0335209','ANON7414571','ANON9604223','ANON4712664','ANON5824292','ANON2411221','ANON5958718','ANON7828652','ANON9873056','ANON3504149']
         }
+
+
+def setup_logger(log_dir: Path, use_time: bool = True, part_fname: str = None) -> logging.Logger:
+    """
+    Configure logging to both console and file.
+    This function sets up logging based on the specified logging directory.
+    It creates a log file named with the current timestamp and directs log 
+    messages to both the console and the log file.
+    Parameters:
+    - log_dir (Path): Directory where the log file will be stored.
+    Returns:
+    - logging.Logger: Configured logger instance.
+    """
+    current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    if use_time: 
+        log_file = log_dir / f"log_{current_time}.log"
+    elif part_fname is not None and use_time: 
+        log_file = log_dir / f"log_{part_fname}_{current_time}.log"
+    elif part_fname is not None and not use_time:
+        log_file = log_dir / f"log_{part_fname}.log"
+    else:
+        log_file = log_dir / "log.log"
+
+    l = logging.getLogger()
+    l.setLevel(logging.INFO)
+
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(formatter)
+    l.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    l.addHandler(console_handler)
+
+    return l
 
 
 def extract_acquisition_parameters(h5_file_path):
@@ -270,7 +192,7 @@ def print_column_stats(df: pd.DataFrame, column_name: str) -> None:
         print()
     
 
-def print_stats_for_table_to_console(df: pd.DataFrame) -> None:
+def print_summarized_stats(df: pd.DataFrame) -> None:
     """Prints statistics for specified columns in the DataFrame."""
     columns_to_analyze = ['max_slices', 'receiver_channels', 'matrix_size_encodedspace_x', 'matrix_size_encodedspace_y']
     
@@ -278,20 +200,20 @@ def print_stats_for_table_to_console(df: pd.DataFrame) -> None:
         print_column_stats(df, column)
 
 
-def filter_inclusion_list(cfg):
+def filter_inclusion_list_h5s(dataset_root: Path, incl_ids: List[str]) -> List[Path]:
     """
     Filters the list of h5 files to only include those that are in the inclusion list.
     
     Parameters:
-    cfg (dict): Configuration dictionary.
+    dataset_root (Path): Path to the dataset root directory.
+    incl_ids (list): List of anonymized IDs to include.
     
     Returns:
     list: List of Path objects to the h5 files that are in the inclusion list.
     """
-    
     h5_files = []
-    for pat_dir in cfg['dataset_root'].iterdir():
-        if pat_dir.name.split("_")[1] in cfg['inclusion_anon_ids']:
+    for pat_dir in dataset_root.iterdir():
+        if pat_dir.name.split("_")[1] in incl_ids:
             print(f"processing {pat_dir.name}")
             files = list(pat_dir.glob('h5s/*.h5'))
             assert len(files) == 1, f"expected 1 h5 file, got {len(files)}"
@@ -301,28 +223,163 @@ def filter_inclusion_list(cfg):
             continue
     return h5_files
 
+
+def find_sequence_directories(study_dir: Path, patient_id: str = None, logger: logging.Logger = None) -> tuple:
+    series_dirs = list(study_dir.iterdir())
+    dwi_dirs, adc_dirs, t2w_tra_dirs = [], [], []
+
+    for series_dir in series_dirs:       
+        if 'ep_calc' in series_dir.name:  # DWI series
+            dwi_dirs.append(series_dir.name)        
+        elif 'ep_b50_1000' in series_dir.name:  # ADC series
+            adc_dirs.append(series_dir.name)        
+        elif 'tse2d1' in series_dir.name:  # T2W series
+            first_file = next(series_dir.iterdir(), None)
+            if first_file:
+                try:
+                    description = pydicom.dcmread(first_file, stop_before_pixels=True).SeriesDescription.lower()
+                    if 't2_tse_tra' in description:
+                        t2w_tra_dirs.append(series_dir.name)
+                except Exception as e:
+                    logger.error(f"Error reading DICOM file {first_file}: {e}")
+        else:
+            logger.warning(f"Skipping unknown series directory: {series_dir.name}")
+
+    # Sort and select the T2W directory with the latest acquisition time if there are multiple
+    if len(t2w_tra_dirs) > 1:
+        t2w_tra_dirs = sort_t2w_tra_directories_by_creation_time(t2w_tra_dirs, study_dir, logger)
+        logger.info(f"Multiple T2W directories found for patient {patient_id}. Selected {t2w_tra_dirs[0]} based on latest acquisition time.")
+
+    logger.info(f"Selected sequences for patient {patient_id}:\n\tDWI: {dwi_dirs[0]},\n\tADC: {adc_dirs[0]},\n\tT2W TRA: {t2w_tra_dirs[0]}") 
+    return dwi_dirs, adc_dirs, t2w_tra_dirs
+
+
+def sort_t2w_tra_directories_by_creation_time(t2w_tra_directories, study_directory, logger):
+    creation_times = []
+
+    for directory_name in t2w_tra_directories:
+        series_dir_path = study_directory / directory_name
+        first_file_path = next(series_dir_path.iterdir(), None)
+
+        if first_file_path:
+            try:
+                dicom_header = pydicom.dcmread(first_file_path, stop_before_pixels=True)
+                # Convert the creation time string to a float for correct sorting
+                creation_time = float(dicom_header.InstanceCreationTime)
+                creation_times.append((directory_name, creation_time))
+                
+                # Log the datatype and value for manual checking
+                logger.info(f"Directory: {directory_name}, Converted InstanceCreationTime: {creation_time} (Type: {type(creation_time)})")
+                
+            except AttributeError as e:
+                logger.error(f"InstanceCreationTime attribute missing in {first_file_path}. Error: {e}")
+            except ValueError as e:
+                # This catches cases where the conversion to float fails
+                logger.error(f"Error converting InstanceCreationTime to float in {first_file_path}. Value: '{dicom_header.InstanceCreationTime}', Error: {e}")
+            except Exception as e:
+                logger.error(f"Error reading {first_file_path}. Error: {e}")
+        else:
+            logger.warning(f"No DICOM files found in {series_dir_path}")
+
+    # Sort directories by converted creation time (now as floats)
+    sorted_directories = sorted(creation_times, key=lambda x: x[1], reverse=True)
+
+    # Extract sorted directory names
+    sorted_t2w_tra_directories = [item[0] for item in sorted_directories]
+    
+    ans = input(f"Creation time: {creation_times}\nSorted directories: {sorted_directories}\n Continue? (y/n): ")
+    if ans.lower() != 'y':
+        raise Exception("User aborted sorting of T2W TRA directories.")
+    
+    return sorted_t2w_tra_directories
+
+
+def extract_scan_params_from_h5s(dataset_root: Path, inclusion_ids: List[str], logger: logging.Logger) -> pd.DataFrame:
+    """
+    Extracts acquisition parameters from the ISMRMRD headers in the HDF5 files.
+    
+    Parameters:
+    dataset_root (Path): Path to the dataset root directory.
+    inclusion_anon_ids (list): List of anonymized IDs to include.
+    
+    Returns:
+    pd.DataFrame: DataFrame containing the acquisition parameters.
+    """
+    
+    h5_files = filter_inclusion_list_h5s(dataset_root, inclusion_ids)
+    acq_params_list = []
+    for idx, h5_file in enumerate(h5_files):
+        logger.info(f"processing {idx+1}/{len(h5_files)}. fpath: {h5_file}")
+        acq_params = extract_acquisition_parameters(h5_file)
+        acq_params_list.append(acq_params)
+    df = pd.DataFrame(acq_params_list)
+    df = df.sort_values(by=['id_seq'])
+    return df
+
+
+def is_date(string):
+    try:
+        datetime.strptime(string, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+    
+
+def get_study_dir(pat_dcm_dir: Path, pat_id: str) -> Path:
+    study_dirs = []
+    for d in pat_dcm_dir.iterdir():
+        if d.is_dir() and d.name != "archive" and is_date(d.name):
+            study_dirs.append(d)
+            
+    assert len(study_dirs) == 1, f"Error: {pat_id} has {len(study_dirs)} study directories. We didnt find exactly 1 study dir for patient {pat_id}."
+    return study_dirs[0]
+
+
+def extract_scan_params_from_dicoms(dataset_root: Path, inclusion_ids: List[str], logger: logging.Logger) -> pd.DataFrame:
+    """
+    """
+    
+    acq_param_list = []
+    patient_dirs = sorted(dataset_root.iterdir(), key=lambda x: x.name)
+    for idx, pat_dir in enumerate(patient_dirs):
+        anon_id = pat_dir.name.split("_")[1]
+        pat_id = pat_dir.name
+        if anon_id not in inclusion_ids:
+            print(f"skipping {pat_dir.name} as it is not in the inclusion list")
+            continue            
+    
+        pat_dcm_dir = dataset_root / pat_dir.name / 'dicoms'                                    # 1. go into patient dicoms dir
+        study_dir   = get_study_dir(pat_dcm_dir, pat_id)                                        # 2. get the study directories
+        dwi_dirs, adc_dirs, t2_tra_dirs = find_sequence_directories(study_dir, pat_id, logger)  # 3. find the sequence directories
+
+        x = 4
+
 def main():
     cfg = get_configurations()
-    fpath = cfg['stats_root'] / 'results' / 'acquisition_parameters_umcg.csv'
+    logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='extr_prms_h5s_dcms')
     
-    h5_files = filter_inclusion_list(cfg)
-    
-    if fpath.exists():
-        df = pd.read_csv(fpath, sep=';')
+    if not cfg['scan_params_out_fpath'].exists() or cfg['force_new_file']:
+        logger.info(f"creating new file at {cfg['scan_params_out_fpath']}")
+        df_h5s = extract_scan_params_from_h5s(cfg['dataset_root'], cfg['inclusion_anon_ids'], logger)
+        df_h5s.to_csv(cfg['scan_params_out_fpath'], index=False, sep=';')
+        logger.info(f"saved to {cfg['scan_params_out_fpath']}")
     else:
-        acq_params_list = []
-        for idx, h5_file in enumerate(h5_files):
-            print(f"processing {idx+1}/{len(h5_files)}. fpath: {h5_file}")
-            acq_params = extract_acquisition_parameters(h5_file)
-            acq_params_list.append(acq_params)
-        df = pd.DataFrame(acq_params_list)
-        df = df.sort_values(by=['id_seq'])
-        df.to_csv(fpath, index=False, sep=';')
-        print(f"saved to {fpath}")
+        logger.info(f"loading from {cfg['scan_params_out_fpath']}")
+        df_h5s = pd.read_csv(cfg['scan_params_out_fpath'], sep=';')
     
-    print(df.head(10))
-    print_stats_for_table_to_console(df)
+    # visualize the first 10 rows of the dataframe and print summarized statistics for the table in the article
+    print(df_h5s.head(10))
+    print_summarized_stats(df_h5s)
     
-        
+    # we need to read the dicom files that are in the inclusion list from the dataset_root, than we find the dicom files and extract the voxel size, FOV, TR, TE and scan time.
+    df_dcms = extract_scan_params_from_dicoms(
+        dataset_root = cfg['dataset_root'],
+        incl_ids     = cfg['inclusion_anon_ids'],
+        logger       = logger
+    )
+    
+    
+    
+    
 if __name__ == "__main__":
     main()
