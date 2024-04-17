@@ -1,6 +1,8 @@
 import h5py
 from xml.etree import ElementTree as ET
 from pathlib import Path
+import pydicom
+
 
 def print_ismrmrd_header(path):
     with h5py.File(path, 'r') as df:
@@ -20,5 +22,18 @@ def print_ismrmrd_header(path):
         x=4
 
 if __name__ == "__main__":
-    path = Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data/0008_ANON8890538/h5s/meas_MID00224_FID710582_T2_TSE_tra_obl-out_2.h5')
-    print_ismrmrd_header(path)
+
+    # Load the DICOM file
+    dicom_file_path = Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data/0008_ANON8890538/dicoms/2022-05-25/tse2d1_25_1.3.12.2.1107.5.2.19.46133.2022052511231694378259504.0.0.0/sl_-0_404')
+    ds = pydicom.dcmread(dicom_file_path)
+
+    # Accessing the value of the private tag
+    private_tag_value = ds.get((0x0051, 0x100A))
+
+    # Extract just the string value, if the tag is present
+    if private_tag_value is not None:
+        # Access the .value attribute to get the raw value
+        raw_value = private_tag_value.value
+        print(f"Raw value of private tag (0051, 100A): {raw_value}")
+    else:
+        print("Tag (0051, 100A) not found in the DICOM file.")

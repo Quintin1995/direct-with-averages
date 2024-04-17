@@ -18,16 +18,21 @@ from scipy.ndimage import gaussian_laplace
 from typing import Tuple
 
 
-def parse_args():
-    print("\n\n\n")
-    parser = argparse.ArgumentParser(description='Create H5 files for all patients')
-    parser.add_argument('--dataset_dir', type=str, default='/scratch/p290820/datasets/003_umcg_pst_ksps/', help='Path to the dataset directory')
-    parser.add_argument('--debug', action='store_true', help='Debug mode')
-    args = parser.parse_args()
-    for arg in vars(args):
-        print(f"{arg}: {getattr(args, arg)}")
-    print("\n\n\n")
-    return args
+def get_configurations() -> dict:
+    return {
+        "project_dir":           Path('/scratch/hb-pca-rad/projects/03_nki_reader_study'),
+        "dataset_dir":           Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data/'),
+        "log_dir":               Path('/scratch/hb-pca-rad/qvl/logs'),
+        "temp_dir":              Path('/scratch/hb-pca-rad/qvl/temp'),
+        
+        'do_ssim_map':           False,
+        'log_dir':               Path(args.dataset_dir) / 'logs',
+        'fig_dir':               Path(args.dataset_dir) / 'figures',
+        'df_fpath':              Path(args.dataset_dir) / 'results' / "iqms_per_fovs_on_accs_with_RIM_results_v2.csv",
+        'accelerations':         [2,4,6,8] if not DEBUG else [2,4], # Accelerations included for post-processing.
+        'image_quality_metrics': ['ssim', 'psnr', 'nmse', 'vofl'],
+        'decimals':              3,
+    }
 
 
 def setup_logger(log_dir: Path, use_time: bool = True) -> logging.Logger:
@@ -436,172 +441,7 @@ def process_lesion_fov(
         new_row = pd.DataFrame([data])
         df = pd.concat([df, new_row], ignore_index=True)
 
-    # # Calculate mirrored bounding boxes
-    # mirrored_min_coords = np.array(target.shape[:3]) - max_coords - 1
-    # mirrored_max_coords = np.array(target.shape[:3]) - min_coords - 1
-
-    # mirrored_recon = recon[mirrored_min_coords[0]:mirrored_max_coords[0], 
-    #                        mirrored_min_coords[1]:mirrored_max_coords[1], 
-    #                        mirrored_min_coords[2]:mirrored_max_coords[2]]
-
-    # mirrored_target = target[mirrored_min_coords[0]:mirrored_max_coords[0], 
-    #                          mirrored_min_coords[1]:mirrored_max_coords[1], 
-    #                          mirrored_min_coords[2]:mirrored_max_coords[2]]
-
-    # mirrored_seg = seg[mirrored_min_coords[0]:mirrored_max_coords[0], 
-    #                mirrored_min_coords[1]:mirrored_max_coords[1], 
-    #                mirrored_min_coords[2]:mirrored_max_coords[2]]
-
-    # save_slices_as_images(
-    #     seg_bb       = mirrored_seg,
-    #     recon_bb     = mirrored_recon,
-    #     target_bb    = mirrored_target,
-    #     pat_dir      = pat_dir,
-    #     output_dir   = str(pat_dir / "lesion_bbs"),
-    #     acceleration = acc,
-    #     lesion_num   = seg_idx+1,
-    #     is_mirror    = True,
-    # )
-
-    # # Calculate IQMs for mirrored region
-    # for slice_idx in range(mirrored_recon.shape[0]):
-    #     data = {
-    #         'pat_id':       pat_dir.name,
-    #         'acceleration': acc,
-    #         'ssim':         round(fastmri_ssim_qvl(gt=mirrored_target[slice_idx], pred=mirrored_recon[slice_idx]), decimals),
-    #         'psnr':         round(fastmri_psnr_qvl(gt=mirrored_target[slice_idx], pred=mirrored_recon[slice_idx]), decimals),
-    #         'nmse':         round(fastmri_nmse_qvl(gt=mirrored_target[slice_idx], pred=mirrored_recon[slice_idx]), decimals),
-    #         'vofl':         round(blurriness_metric(image=mirrored_recon[slice_idx]), decimals),
-    #         'roi':          f"lsfov_ml{seg_idx+1}_s{slice_idx+1}",
-    #     }
-    #     new_row = pd.DataFrame([data])
-    #     df = pd.concat([df, new_row], ignore_index=True)
-
     return df, seg_bb
-
-
-# def find_regions_of_interest_3d(cv_map: np.ndarray, window_size: int = 11, num_regions: int = 2, boundary: int = 20):
-#     """
-#     Find homogeneous and inhomogeneous regions based on the CV map in 3D.
-
-#     Parameters:
-#     - cv_map (np.ndarray): 3D Coefficient of Variation map.
-#     - window_size (int): The size of the window to compute local mean CV.
-#     - num_regions (int): The number of regions to identify for low and high variance.
-#     - boundary (int): Number of pixels from the edge to exclude from ROI selection.
-
-#     Returns:
-#     - low_var_coords (np.ndarray): Coordinates of regions with low variance.
-#     - high_var_coords (np.ndarray): Coordinates of regions with high variance.
-#     """
-
-#     # Focus on the center 10 slices
-#     depth = cv_map.shape[0]
-#     start_slice = max(depth // 2 - 5, 0)
-#     end_slice = min(depth // 2 + 5, depth)
-#     center_slices = cv_map[start_slice:end_slice, :, :]
-    
-#     # Compute the local mean CV for the center slices
-#     local_mean_cv = uniform_filter(center_slices, size=(1, window_size, window_size))
-
-#     # Block out the boundary by setting the CV values to extremes
-#     local_mean_cv[:, :boundary, :] = np.inf
-#     local_mean_cv[:, :, :boundary] = np.inf
-#     local_mean_cv[:, -boundary:, :] = np.inf
-#     local_mean_cv[:, :, -boundary:] = np.inf
-
-#     # Flatten the local mean CV map and find the indices of the top num_regions for low and high variance
-#     local_mean_cv_flat = local_mean_cv.ravel()
-#     low_var_indices = np.argpartition(local_mean_cv_flat, num_regions)[:num_regions]
-#     high_var_indices = np.argpartition(-local_mean_cv_flat, num_regions)[:num_regions]
-
-#     # Convert the indices back to 3D coordinates
-#     low_var_coords = np.column_stack(np.unravel_index(low_var_indices, local_mean_cv.shape)) + [start_slice, 0, 0]
-#     high_var_coords = np.column_stack(np.unravel_index(high_var_indices, local_mean_cv.shape)) + [start_slice, 0, 0]
-
-#     return low_var_coords, high_var_coords
-
-
-# def compute_cv_map_3d(image: np.ndarray, window_size: int) -> np.ndarray:
-#     """
-#     Compute the coefficient of variation (CV) map of a 3D image.
-    
-#     Parameters:
-#     - image (np.ndarray): The input 3D image array (num_slices, height, width).
-#     - window_size (int): The size of the window to compute local statistics.
-    
-#     Returns:
-#     - cv_map (np.ndarray): The computed 3D CV map.
-#     """
-#     depth, height, width = image.shape
-#     cv_map = np.zeros((depth, height, width), dtype=np.float32)
-    
-#     for slice_idx in range(depth):
-#         # Calculate the local mean
-#         local_mean = uniform_filter(image[slice_idx], size=window_size)
-        
-#         # Calculate the local variance
-#         local_var = uniform_filter(image[slice_idx]**2, size=window_size) - (local_mean ** 2)
-        
-#         # Calculate the local standard deviation
-#         local_std = np.sqrt(local_var)
-        
-#         # Calculate the coefficient of variation (CV)
-#         cv_map[slice_idx] = np.where(local_mean > 0, local_std / local_mean, 0)
-    
-    return cv_map
-
-
-# def visualize_cv_map(cv_map_2d: np.ndarray, colormap: str = 'viridis', save_path: str = None):
-#     """
-#     Visualize the Coefficient of Variation (CV) map.
-    
-#     Parameters:
-#     - cv_map_2d (np.ndarray): The CV map to visualize.
-#     - colormap (str): The colormap to use for visualization.
-#     - save_path (str): The path to save the image. If None, the image won't be saved.
-    
-#     Returns:
-#     None
-#     """
-#     plt.figure(figsize=(10, 10))
-#     plt.imshow(cv_map_2d, cmap=colormap)
-#     plt.colorbar(label='Coefficient of Variation')
-#     plt.title('Coefficient of Variation Map')
-#     plt.axis('off')
-    
-#     if save_path:
-#         plt.savefig(save_path)
-#         logger.info(f"Saved CV map to {save_path}")
-#     else:
-#         plt.show()
-
-
-# def generate_random_coordinates(grid_shape: tuple, bbox_dims: tuple, num_locations: int = 6) -> np.ndarray:
-#     """
-#     Generate random coordinates within a grid while accommodating a bounding box and avoiding edges.
-
-#     Parameters:
-#     - grid_shape (tuple): The shape of the grid (height, width).
-#     - bbox_dims (tuple): The dimensions of the bounding box (height, width).
-#     - num_locations (int): The number of random locations to generate.
-
-#     Returns:
-#     - coordinates (np.ndarray): An array of shape (num_locations, 2) containing the (x, y) coordinates.
-#     """
-    
-#     # Calculate the buffer needed to avoid placing the bounding box too close to the edge
-#     edge_buffer_x = bbox_dims[0] // 2
-#     edge_buffer_y = bbox_dims[1] // 2
-
-#     # Generate random x and y coordinates within the adjusted grid
-#     random_x = np.random.randint(edge_buffer_x, grid_shape[0] - edge_buffer_x - bbox_dims[0], num_locations)
-#     random_y = np.random.randint(edge_buffer_y, grid_shape[1] - edge_buffer_y - bbox_dims[1], num_locations)
-
-#     # Combine x and y coordinates into a single array
-#     coordinates = np.column_stack((random_x, random_y))
-    
-#     return coordinates
 
 
 def write_patches_to_file(
@@ -640,74 +480,6 @@ def write_patches_to_file(
     plt.close(fig)
 
     logger.info(f"Saved a pair of patches with low SSIM to {patch_output_path}")
-
-
-# def generate_ssim_map_3d(
-#     gt: np.ndarray,
-#     pred: np.ndarray,
-#     window_size: int,
-#     stride: int,
-#     logger: logging.Logger = None
-# ) -> np.ndarray:
-#     """
-#     Generate an SSIM map for 3D data (slices first) using a sliding window approach.
-#     Also known as a Structural Similarity Index Map (SSIM map).
-
-#     Parameters:
-#     - gt (np.ndarray): Ground truth 3D volume (slices first).
-#     - pred (np.ndarray): Predicted 3D volume (slices first).
-#     - window_size (int): Size of the square window to calculate SSIM.
-#     - stride (int): Stride for the sliding window.
-#     - logger (logging.Logger): Logger instance for logging messages.
-
-#     Returns:
-#     - ssim_map (np.ndarray): SSIM map with the same dimensions as the input volume.
-#     """
-#     assert gt.shape == pred.shape, "Shapes of ground truth and prediction must match."
-
-#     logger.info(f"Generating SSIM map for 3D data (slices first) with window size {window_size} and stride {stride}.")
-#     logger.info(f"\tGround truth shape: {gt.shape} and reconstruction shape: {pred.shape}")
-#     start_time = time.time()  # Start timing
-
-#     # Initialize SSIM map for the 3D volume
-#     ssim_map = np.zeros_like(gt)
-    
-#     nslices, height, width = gt.shape
-
-#     # Iterate over each slice in the 3D volume
-#     for slice_idx in range(nslices):
-#         logger.info(f"\t\tGenerating SSIM-Map Slice {slice_idx+1}/{nslices}")
-#         for y in range(0, height - window_size + 1, stride):
-#             for x in range(0, width - window_size + 1, stride):
-                
-#                 gt_patch   = gt[slice_idx, y:y + window_size, x:x + window_size]
-#                 pred_patch = pred[slice_idx, y:y + window_size, x:x + window_size]
-
-#                 ssim = structural_similarity(
-#                     gt_patch, 
-#                     pred_patch, 
-#                     data_range=gt.max() - gt.min()
-#                 )
-                
-#                 # Save patches with low SSIM to file for visual inspection. An ssim value lower than 0.2 is considered too low, so something must be up.
-#                 if ssim < 0.2:
-#                     write_patches_to_file(
-#                         gt_patch    = gt_patch,
-#                         pred_patch  = pred_patch,
-#                         slice_idx   = slice_idx,
-#                         y           = y,
-#                         x           = x,
-#                         output_dir  = Path("/home1/p290820/tmp/low_ssim_patches"),
-#                         logger      = logger,
-#                     )
-
-#                 ssim_map[slice_idx, y:y + window_size, x:x + window_size] = ssim
-
-#     duration = time.time() - start_time
-#     if logger:
-#         logger.info(f"SSIM map generation for 3D data (slices first) took {duration:.2f} seconds.")
-
-#     return ssim_map
 
 
 def calculate_ssim_for_slice(
@@ -1036,37 +808,15 @@ def plot_all_quality_metrics(
         logger.info(f"Saved figure to {save_path}") if logger else None
 
 
+def main():
+    
+
 ##########################################################################################
 if __name__ == "__main__":
 
     # Arguments
-    args  = parse_args()
-    DEBUG = True if args.debug else False
-    TEMPDIR = Path("/home1/p290820/tmp")
+    cfg = get_configurations()
 
-    cfgs = {
-        'do_ssim_map':           True,
-        'dataset_dir':           Path(args.dataset_dir),
-        'patients_dir':          Path(args.dataset_dir) / 'pat_data',
-        'log_dir':               Path(args.dataset_dir) / 'logs',
-        'fig_dir':               Path(args.dataset_dir) / 'figures',
-        'df_fpath':              Path(args.dataset_dir) / 'results' / "iqms_per_fovs_on_accs_with_RIM_results_v2.csv",
-        'accelerations':         [2,4,6,8] if not DEBUG else [2,4], # Accelerations included for post-processing.
-        'image_quality_metrics': ['ssim', 'psnr', 'nmse', 'vofl'],
-        'decimals':              3,
-        'exclusion_list':        [],
-        'include_list': [
-            '0002',  # pat0002
-            '0003',  # pat0003
-            '0004',  # pat0004
-            '0005',  # pat0005
-            # '0006',  # pat0006     # This patient is excluded because it has a different number of slices
-            '0007',  # pat0007
-            '0008',  # pat0008
-            '0009',  # pat0009
-            '0010',   # pat0010
-        ]
-    }
     logger = setup_logger(cfgs['log_dir'], use_time=False)
 
     if DEBUG:
