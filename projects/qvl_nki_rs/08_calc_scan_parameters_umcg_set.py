@@ -70,6 +70,11 @@ def extract_acquisition_parameters(h5_file_path):
     header_str = header_bytes.decode('utf-8')
     root = ET.fromstring(header_str)
     
+    # SYSTEM MODEL: Extract the system model
+    sm_elem = root.find('.//{http://www.ismrm.org/ISMRMRD}systemModel')
+    if sm_elem is not None:
+        acq_params['system_model'] = sm_elem.text
+    
     # COILS: Extract the number of receiver channels
     rc_elem = root.find('.//{http://www.ismrm.org/ISMRMRD}receiverChannels')
     if rc_elem is not None:
@@ -103,17 +108,7 @@ def extract_acquisition_parameters(h5_file_path):
     z        = fov_elem.find('.//{http://www.ismrm.org/ISMRMRD}z')
     acq_params['fov_encodedspace'] = (float(x.text), float(y.text), float(z.text))
     
-    # FOV mm and SLICE THICKNESS: Extract the field of view and slice thickness
-    # in the UMCG data, the field of view is hardcoded to 180x180mm and the slice thickness to 3mm, this data was not set into the ISMRMRD header
-    fov_elem = es_elem.find('.//{http://www.ismrm.org/ISMRMRD}fieldOfView_mm')
-    # x        = 180
-    # y        = 180
-    # z        = 3
-    # slice_thinkness        = fov_elem.find('.//{http://www.ismrm.org/ISMRMRD}z')
-    # acq_params['fov_mm'] = (x, y)
-    # acq_params['slice_thickness'] = z
-    
-    acq_params_dict = {
+    return {
         'id_seq': acq_params['id'].split('_')[0],
         'id_anon': acq_params['id'].split('_')[1],
         'receiver_channels': acq_params['receiver_channels'],
@@ -128,9 +123,8 @@ def extract_acquisition_parameters(h5_file_path):
         'slice_thickness': acq_params['fov_encodedspace'][2],
         'in_plane_resolution_x': acq_params['in_plane_resolution'][0],
         'in_plane_resolution_y': acq_params['in_plane_resolution'][1],
+        'manufacturer_model_name': acq_params.get('system_model', 'NA')
     }
-    
-    return acq_params_dict
 
 
 def handle_matrix_values(value):
@@ -226,12 +220,14 @@ def filter_inclusion_list_h5s(dataset_root: Path, incl_ids: List[str], logger: l
     h5_files = []
     for pat_dir in dataset_root.iterdir():
         if pat_dir.name.split("_")[1] in incl_ids:
-            logger.info(f"processing {pat_dir.name}")
+            if logger:
+                logger.info(f"processing {pat_dir.name}")
             files = list(pat_dir.glob('h5s/*.h5'))
             assert len(files) == 1, f"expected 1 h5 file, got {len(files)}"
             h5_files.append(files[0])
         else:
-            logger.warning(f"skipping {pat_dir.name} as it is not in the inclusion list")
+            if logger:
+                logger.warning(f"skipping {pat_dir.name} as it is not in the inclusion list")
             continue
     return h5_files
 
@@ -323,7 +319,7 @@ def extract_sequence_params_h5s(dataset_root: Path, inclusion_ids: List[str], lo
     pd.DataFrame: DataFrame containing the acquisition parameters.
     """
     
-    h5_files = filter_inclusion_list_h5s(dataset_root, inclusion_ids, logger)
+    h5_files = filter_inclusion_list_h5s(dataset_root, inclusion_ids)
     acq_params_list = []
     for idx, h5_file in enumerate(h5_files):
         logger.info(f"processing {idx+1}/{len(h5_files)}. fpath: {h5_file}")
@@ -471,18 +467,17 @@ def main(
     logger: logging.Logger,
     **kwargs,
 ):  
-    if False:
-        # PART 1
-        # First we need to read the HDF5 files that are in the inclusion list from the dataset_root, than we find the HDF5 files and extract the receiver channels, max slices, matrix size reconspace, matrix size encodedspace, fov encodedspace, fov mm and slice thickness.
-        if not h5s_params_out_fpath.exists() or force_new_file:
-            logger.info(f"creating new file at {h5s_params_out_fpath}")
-            df_h5s = extract_sequence_params_h5s(dataset_root, inclusion_anon_ids, logger)
-            df_h5s.to_csv(h5s_params_out_fpath, index=False, sep=';')
-            logger.info(f"saved to {h5s_params_out_fpath}")
-        else:
-            logger.info(f"loading from {h5s_params_out_fpath}")
-            df_h5s = pd.read_csv(h5s_params_out_fpath, sep=';')
-        print_summarized_stats(df_h5s, cols_to_analyze_h5, seq_type=None, logger=logger)
+    # PART 1
+    # First we need to read the HDF5 files that are in the inclusion list from the dataset_root, than we find the HDF5 files and extract the receiver channels, max slices, matrix size reconspace, matrix size encodedspace, fov encodedspace, fov mm and slice thickness.
+    if not h5s_params_out_fpath.exists() or force_new_file:
+        logger.info(f"creating new file at {h5s_params_out_fpath}")
+        df_h5s = extract_sequence_params_h5s(dataset_root, inclusion_anon_ids, logger)
+        df_h5s.to_csv(h5s_params_out_fpath, index=False, sep=';')
+        logger.info(f"saved to {h5s_params_out_fpath}")
+    else:
+        logger.info(f"loading from {h5s_params_out_fpath}")
+        df_h5s = pd.read_csv(h5s_params_out_fpath, sep=';')
+    print_summarized_stats(df_h5s, cols_to_analyze_h5, seq_type=None, logger=logger)
     
     # PART 2
     # we need to read the dicom files that are in the inclusion list from the dataset_root, than we find the dicom files and extract the voxel size, FOV, TR, TE and scan time.
@@ -509,7 +504,7 @@ def get_configurations():
             'h5s_params_out_fpath':  Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/acquisition_parameters_h5s_umcg.csv'),
             'dcms_params_out_fpath': Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/acquisition_parameters_dcms_umcg.csv'),
             'cols_to_analyze_h5':    ['max_slices', 'receiver_channels', 'matrix_size_encodedspace_x', 'matrix_size_encodedspace_y'],
-            'cols_to_analyze_dcms':  ['recon_space', 'fov', 'slice_thickness', 'in_plane_resolution', 'tr', 'te', 'scan_duration', 'acquisition_matrix', 'patient_age', 'number_of_phase_encoding_steps', 'manufacturer_model_name'],
+            'cols_to_analyze_dcms':  ['recon_space', 'fov', 'slice_thickness', 'in_plane_resolution', 'tr', 'te', 'scan_duration', 'acquisition_matrix', 'patient_age', 'number_of_phase_encoding_steps'],
             'inclusion_anon_ids':    ['ANON5046358','ANON9616598','ANON2379607','ANON8290811','ANON1586301','ANON8890538','ANON7748752','ANON1102778','ANON4982869','ANON7362087','ANON3951049','ANON9844606','ANON9843837','ANON7657657','ANON1562419','ANON4277586','ANON6964611','ANON7992094','ANON3394777','ANON3620419','ANON9724912','ANON3397001','ANON7189994','ANON9141039','ANON7649583','ANON9728185','ANON3474225','ANON0282755','ANON0369080','ANON0604912','ANON2361146','ANON9423619','ANON7041133','ANON8232550','ANON2563804','ANON3613611','ANON6365688','ANON9783006','ANON1327674','ANON9710044','ANON5517301','ANON2124757','ANON3357872','ANON1070291','ANON9719981','ANON7955208','ANON7642254','ANON0319974','ANON9972960','ANON0282398','ANON0913099','ANON7978458','ANON9840567','ANON5223499','ANON9806291','ANON5954143','ANON5895496','ANON3983890','ANON8634437','ANON6883869','ANON8828023','ANON4499321','ANON9763928','ANON9898497','ANON6073234','ANON4535412','ANON6141178','ANON8511628','ANON9534873','ANON9892116','ANON0891692','ANON9786899','ANON9941969','ANON8024204','ANON9728761','ANON4189062','ANON5642073','ANON8583296','ANON4035085','ANON7748630','ANON9883201','ANON0424679','ANON9816976','ANON8266491','ANON9310466','ANON3210850','ANON9665113','ANON0400743','ANON9223478','ANON3865800','ANON7141024','ANON7275574','ANON9629161','ANON7265874','ANON8610762','ANON0272089','ANON4747182','ANON8023509','ANON8627051','ANON5344332','ANON9879440','ANON8096961','ANON8035619','ANON1747790','ANON2666319','ANON0899488','ANON8018038','ANON7090827','ANON9752849','ANON2255419','ANON0335209','ANON7414571','ANON9604223','ANON4712664','ANON5824292','ANON2411221','ANON5958718','ANON7828652','ANON9873056','ANON3504149']
         }
     
