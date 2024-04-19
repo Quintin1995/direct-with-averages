@@ -4,23 +4,12 @@ import logging
 import pydicom
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 
 from pathlib import Path
 from scipy.stats import shapiro
 from typing import List, Tuple
 from datetime import datetime
-
-def get_configurations():
-    return {
-            'force_new_file':        False,
-            'dataset_root':          Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data'),
-            'project_root':          Path('/scratch/p290820/projects/03_nki_reader_study'),
-            "log_dir":               Path('/scratch/hb-pca-rad/qvl/logs'),
-            'stats_root':            Path('/scratch/p290820/projects/03_nki_reader_study/stats'),
-            'h5s_params_out_fpath':  Path('/scratch/p290820/projects/03_nki_reader_study/stats/results/acquisition_parameters_h5s_umcg.csv'),
-            'dcms_params_out_fpath': Path('/scratch/p290820/projects/03_nki_reader_study/stats/results/acquisition_parameters_dcms_umcg.csv'),
-            'inclusion_anon_ids':    ['ANON5046358','ANON9616598','ANON2379607','ANON8290811','ANON1586301','ANON8890538','ANON7748752','ANON1102778','ANON4982869','ANON7362087','ANON3951049','ANON9844606','ANON9843837','ANON7657657','ANON1562419','ANON4277586','ANON6964611','ANON7992094','ANON3394777','ANON3620419','ANON9724912','ANON3397001','ANON7189994','ANON9141039','ANON7649583','ANON9728185','ANON3474225','ANON0282755','ANON0369080','ANON0604912','ANON2361146','ANON9423619','ANON7041133','ANON8232550','ANON2563804','ANON3613611','ANON6365688','ANON9783006','ANON1327674','ANON9710044','ANON5517301','ANON2124757','ANON3357872','ANON1070291','ANON9719981','ANON7955208','ANON7642254','ANON0319974','ANON9972960','ANON0282398','ANON0913099','ANON7978458','ANON9840567','ANON5223499','ANON9806291','ANON5954143','ANON5895496','ANON3983890','ANON8634437','ANON6883869','ANON8828023','ANON4499321','ANON9763928','ANON9898497','ANON6073234','ANON4535412','ANON6141178','ANON8511628','ANON9534873','ANON9892116','ANON0891692','ANON9786899','ANON9941969','ANON8024204','ANON9728761','ANON4189062','ANON5642073','ANON8583296','ANON4035085','ANON7748630','ANON9883201','ANON0424679','ANON9816976','ANON8266491','ANON9310466','ANON3210850','ANON9665113','ANON0400743','ANON9223478','ANON3865800','ANON7141024','ANON7275574','ANON9629161','ANON7265874','ANON8610762','ANON0272089','ANON4747182','ANON8023509','ANON8627051','ANON5344332','ANON9879440','ANON8096961','ANON8035619','ANON1747790','ANON2666319','ANON0899488','ANON8018038','ANON7090827','ANON9752849','ANON2255419','ANON0335209','ANON7414571','ANON9604223','ANON4712664','ANON5824292','ANON2411221','ANON5958718','ANON7828652','ANON9873056','ANON3504149']
-        }
 
 
 def setup_logger(log_dir: Path, use_time: bool = True, part_fname: str = None) -> logging.Logger:
@@ -124,7 +113,7 @@ def extract_acquisition_parameters(h5_file_path):
     # acq_params['fov_mm'] = (x, y)
     # acq_params['slice_thickness'] = z
     
-    acq_params = {
+    acq_params_dict = {
         'id_seq': acq_params['id'].split('_')[0],
         'id_anon': acq_params['id'].split('_')[1],
         'receiver_channels': acq_params['receiver_channels'],
@@ -141,21 +130,37 @@ def extract_acquisition_parameters(h5_file_path):
         'in_plane_resolution_y': acq_params['in_plane_resolution'][1],
     }
     
-    return acq_params
+    return acq_params_dict
 
 
-def print_column_stats(df: pd.DataFrame, column_name: str, logger: logging.Logger = None) -> None:
+def handle_matrix_values(value):
+    if isinstance(value, (tuple, list)) and len(value) >= 2:
+        # Check if all elements are numerical and equal
+        if all(isinstance(x, (int, float)) for x in value) and len(set(value)) == 1:
+            return value[0]
+    elif isinstance(value, (int, float)):  # Directly return numerical values
+        return value
+    # Additional handling for other cases if needed
+    return np.nan  # or some default handling
+        
+
+def print_column_stats(df: pd.DataFrame, column_name: str, seq_type: str = None, logger: logging.Logger = None) -> None:
     """Prints statistics for a specified column in a DataFrame and decides whether to use STD or IQR based on normality test."""
     
-    col_series = df[column_name].dropna()  # Remove NaNs as they can't be processed by shapiro
-    col_mu = round(col_series.mean(), 2)
-    col_min = round(col_series.min(), 2)
-    col_max = round(col_series.max(), 2)
-    col_median = round(col_series.median(), 2)
-    col_std = round(col_series.std(), 2)
+    if seq_type in ['dwi', 'adc', 't2w']:
+        logger.info(f"Analyzing {seq_type} sequences")
+        df = df[df['seq_type'] == seq_type]
     
-    # how much percentage of the data is equal to the median?
-    median_count = col_series[col_series == col_median].count()
+    df[column_name] = df[column_name].apply(handle_matrix_values)
+    
+    col_series = df[column_name].dropna()  # Remove NaNs
+    if col_series.empty:
+        if logger:
+            logger.warning(f"No data available for column: {column_name}")
+        return
+    
+    # Percentage of values equal to the median
+    median_count = col_series[col_series == round(col_series.median(), 2)].count()
     median_percentage = round((median_count / len(col_series)) * 100, 2)
     
     # Shapiro-Wilk test for normality
@@ -171,12 +176,12 @@ def print_column_stats(df: pd.DataFrame, column_name: str, logger: logging.Logge
         spread_type = "iqr"
     
     logger.info(f"{column_name}")
-    logger.info(f"\tMedian: {col_median} ({median_percentage}%)")
-    logger.info(f"\tMean: {col_mu}")
-    logger.info(f"\tRange: [{col_min}-{col_max}]")
+    logger.info(f"\tMedian: {round(col_series.median(), 2)} ({median_percentage}%)")
+    logger.info(f"\tMean: {round(col_series.mean(), 2)}")
+    logger.info(f"\tRange: [{round(col_series.min(), 2)}-{round(col_series.max(), 2)}]")
     logger.info(f"\t{spread_type}: {col_spread}")
     logger.info(f"\tIs normally distributed: {is_normal} with p-value: {p_value}")
-    logger.info(f"\tStandard deviation: {col_std} BUT using {spread_type} {col_spread}")
+    logger.info(f"\tStandard deviation: {round(col_series.std(), 2)} BUT using {spread_type} {col_spread}")
     
     # when looking at matrix_size_encodedsapcre_y i want to save a barplot of all values in the range to a tempory matplotlib png file /scratch/p290820/projects/03_nki_reader_study/stats/results/distribution_phase_encoding.png
     if column_name == 'matrix_size_encodedspace_y':
@@ -195,13 +200,17 @@ def plot_distribution_histogram(df: pd.DataFrame, column_name: str, logger: logg
     logger.info(f"plotted distribution of {column_name}")
 
 
-def print_summarized_stats_h5s(df: pd.DataFrame, logger: logging.Logger = None) -> None:
+def print_summarized_stats(df: pd.DataFrame, cols_to_analyze: List[str] = None, seq_type: str = None, logger: logging.Logger = None) -> None:
     """Prints statistics for specified columns in the DataFrame."""
-    columns_to_analyze = ['max_slices', 'receiver_channels', 'matrix_size_encodedspace_x', 'matrix_size_encodedspace_y']
-    
-    for column in columns_to_analyze:
-        print_column_stats(df, column, logger)
-
+    print(df.head(10))
+    for column in cols_to_analyze:
+        print_column_stats(
+            df          = df,
+            column_name = column,
+            logger      = logger,
+            seq_type    = seq_type
+        )
+        
 
 def filter_inclusion_list_h5s(dataset_root: Path, incl_ids: List[str], logger: logging.Logger) -> List[Path]:
     """
@@ -271,37 +280,38 @@ def sort_t2w_tra_directories_by_creation_time(t2w_tra_directories, study_directo
         if first_file_path:
             try:
                 dicom_header = pydicom.dcmread(first_file_path, stop_before_pixels=True)
-                # Convert the creation time string to a float for correct sorting
                 creation_time = float(dicom_header.InstanceCreationTime)
                 creation_times.append((directory_name, creation_time))
-                
-                # Log the datatype and value for manual checking
                 logger.info(f"Directory: {directory_name}, Converted InstanceCreationTime: {creation_time} (Type: {type(creation_time)})")
-                
             except AttributeError as e:
                 logger.error(f"InstanceCreationTime attribute missing in {first_file_path}. Error: {e}")
             except ValueError as e:
-                # This catches cases where the conversion to float fails
                 logger.error(f"Error converting InstanceCreationTime to float in {first_file_path}. Value: '{dicom_header.InstanceCreationTime}', Error: {e}")
             except Exception as e:
                 logger.error(f"Error reading {first_file_path}. Error: {e}")
         else:
             logger.warning(f"No DICOM files found in {series_dir_path}")
 
-    # Sort directories by converted creation time (now as floats)
     sorted_directories = sorted(creation_times, key=lambda x: x[1], reverse=True)
-
-    # Extract sorted directory names
     sorted_t2w_tra_directories = [item[0] for item in sorted_directories]
     
-    # ans = input(f"Creation time: {creation_times}\nSorted directories: {sorted_directories}\n Continue? (y/n): ")
-    # if ans.lower() != 'y':
-    #     raise Exception("User aborted sorting of T2W TRA directories.")
+    # Enhanced output for clarity
+    print("\n\n")
+    for idx, (dir_name, time) in enumerate(sorted_directories, start=1):
+        print(f"{idx}. Directory: '{dir_name}' in Patient Folder: '{study_directory.name}' has Creation Time: {time} with patientID: {study_directory.parts[-3]}")
+
+    ans = input("\nYou have the option to manually review the T2W TRA directories listed above based on their creation time. "
+                "After review, you may choose to delete directories that do not meet the quality criteria. "
+                "Please ensure you have the correct directory paths before proceeding to delete any data.\n"
+                "Do you wish to continue with the manual review? (y/n): ")
+    
+    if ans.lower() != 'y':
+        raise Exception("User aborted sorting of T2W TRA directories.")
     
     return sorted_t2w_tra_directories
 
 
-def extract_scan_params_from_h5s(dataset_root: Path, inclusion_ids: List[str], logger: logging.Logger) -> pd.DataFrame:
+def extract_sequence_params_h5s(dataset_root: Path, inclusion_ids: List[str], logger: logging.Logger) -> pd.DataFrame:
     """
     Extracts acquisition parameters from the ISMRMRD headers in the HDF5 files.
     
@@ -342,16 +352,68 @@ def get_study_dir(pat_dcm_dir: Path, pat_id: str) -> Path:
     return study_dirs[0]
 
 
-def extract_sequence_params(sequence_dirs: List[Path], sequence_type: str, patient_dir: Path, logger: logging.Logger) -> List[dict]:
+def get_formatted_acquisition_matrix(acquisition_matrix: list) -> Tuple[int, int]:
+    """Extracts the acquisition matrix from the DICOM header and returns it as a tuple.
+    If [114, 0, 0, 114] is the acquisition matrix, it will return (114, 114).
+    If [0, 320, 320, 0] is the acquisition matrix, it will return (320, 320).
+    """
+    if acquisition_matrix:
+        # Filter out the zeros
+        non_zero_parts = [part for part in acquisition_matrix if part != 0]
+        
+        # Ensure there are exactly two non-zero values
+        if len(non_zero_parts) == 2:
+            return tuple(non_zero_parts)
+        else:
+            raise ValueError("Acquisition matrix does not have exactly two non-zero dimensions.")
+    else:
+        raise ValueError("Acquisition matrix list is empty or None.")
+
+
+
+def convert_scan_duration(value):
+        parts = value.split(":")
+        if len(parts) == 2 and "*" not in value:
+            return float(parts[0]) * 60 + float(parts[1])
+        return np.nan
+
+
+def get_formatted_scan_duration(header: pydicom.dataset.FileDataset) -> float:
+    """Extract the scan duration from the private tag in the DICOM header.
+    The scan duration is in the format 'TA 00:00' or 'TA 00:00*'.
+    return the scan duration in seconds as a float.
+    """
+    private_tag_value = header.get((0x0051, 0x100A))  # Accessing the value of the private tag (example: scan duration)
+    scan_duration = private_tag_value.value.strip() if private_tag_value is not None else "NA"
+    if scan_duration:
+        try:
+            scan_duration = scan_duration.replace("TA ", "")
+            parts = scan_duration.split(":")
+            if len(parts) == 2 and "*" not in scan_duration:
+                return float(parts[0]) * 60 + float(parts[1])
+            return np.nan
+        except Exception as e:
+            return "NA"
+    return "NA"
+
+
+def get_formatted_patient_age(patient_age: str) -> int:
+    """Format the patient age from for example '067Y' into an integer """
+    if patient_age:
+        try:
+            age = int(patient_age[:-1])
+        except Exception as e:
+            return "NA"
+    return age
+     
+
+def extract_sequence_params_dcm(sequence_dirs: List[Path], sequence_type: str, patient_dir: Path, logger: logging.Logger) -> List[dict]:
     """Extract DICOM parameters from all files in each sequence directory."""
     sequence_params_list = []
     for seq_dir in sequence_dirs:
         seq_files = list(seq_dir.iterdir())
         if seq_files:    # Check if directory is not empty
             header = pydicom.dcmread(seq_files[0], stop_before_pixels=True)
-            private_tag_value = header.get((0x0051, 0x100A))  # Accessing the value of the private tag (example: scan duration)
-            scan_duration = private_tag_value.value.strip() if private_tag_value is not None else "NA"
-            scan_duration = scan_duration.replace("TA ", "")
             params = {
                 'id_seq': patient_dir.name.strip(),
                 'id_anon': patient_dir.name.split("_")[1].strip(),
@@ -362,9 +424,13 @@ def extract_sequence_params(sequence_dirs: List[Path], sequence_type: str, patie
                 'in_plane_resolution': [float(sp) for sp in header.PixelSpacing],  # Ensure numeric values
                 'tr': header.RepetitionTime,
                 'te': header.EchoTime,
-                'scan_duration': scan_duration,  # Use stripped value
+                'scan_duration': get_formatted_scan_duration(header),
                 'series_description': header.SeriesDescription.strip(),
                 'averages': header.get('NumberOfAverages', 'NA'),
+                'acquisition_matrix': get_formatted_acquisition_matrix(header.AcquisitionMatrix),
+                'patient_age': get_formatted_patient_age(header.PatientAge),
+                'number_of_phase_encoding_steps': header.NumberOfPhaseEncodingSteps,
+                'manufacturer_model_name': header.ManufacturerModelName,
             }
             sequence_params_list.append(params)
     return sequence_params_list
@@ -387,9 +453,9 @@ def extract_scan_params_from_dicoms(dataset_root: Path, inclusion_ids: List[str]
         study_dir   = get_study_dir(pat_dcm_dir, pat_dir.name)                                                           # 2. get the study directories
         dwi_dirs, adc_dirs, t2_tra_dirs = find_sequence_directories(study_dir, pat_dir.name, logger, return_first=True)  # 3. find the sequence directories
         
-        acq_param_list.extend(extract_sequence_params([study_dir / d for d in dwi_dirs], 'dwi', pat_dir, logger))
-        acq_param_list.extend(extract_sequence_params([study_dir / d for d in adc_dirs], 'adc', pat_dir, logger))
-        acq_param_list.extend(extract_sequence_params([study_dir / d for d in t2_tra_dirs], 't2w', pat_dir, logger))
+        acq_param_list.extend(extract_sequence_params_dcm([study_dir / d for d in dwi_dirs], 'dwi', pat_dir, logger))
+        acq_param_list.extend(extract_sequence_params_dcm([study_dir / d for d in adc_dirs], 'adc', pat_dir, logger))
+        acq_param_list.extend(extract_sequence_params_dcm([study_dir / d for d in t2_tra_dirs], 't2w', pat_dir, logger))
 
     return pd.DataFrame(acq_param_list)
 
@@ -400,21 +466,23 @@ def main(
     h5s_params_out_fpath: Path,
     dcms_params_out_fpath: Path,
     force_new_file: bool,
+    cols_to_analyze_h5: List[str],
+    cols_to_analyze_dcms: List[str],
     logger: logging.Logger,
     **kwargs,
 ):  
-    # PART 1
-    # First we need to read the HDF5 files that are in the inclusion list from the dataset_root, than we find the HDF5 files and extract the receiver channels, max slices, matrix size reconspace, matrix size encodedspace, fov encodedspace, fov mm and slice thickness.
-    if not h5s_params_out_fpath.exists() or force_new_file:
-        logger.info(f"creating new file at {h5s_params_out_fpath}")
-        df_h5s = extract_scan_params_from_h5s(dataset_root, inclusion_anon_ids, logger)
-        df_h5s.to_csv(h5s_params_out_fpath, index=False, sep=';')
-        logger.info(f"saved to {h5s_params_out_fpath}")
-    else:
-        logger.info(f"loading from {h5s_params_out_fpath}")
-        df_h5s = pd.read_csv(h5s_params_out_fpath, sep=';')
-    print(df_h5s.head(10))
-    print_summarized_stats_h5s(df_h5s, logger)
+    if False:
+        # PART 1
+        # First we need to read the HDF5 files that are in the inclusion list from the dataset_root, than we find the HDF5 files and extract the receiver channels, max slices, matrix size reconspace, matrix size encodedspace, fov encodedspace, fov mm and slice thickness.
+        if not h5s_params_out_fpath.exists() or force_new_file:
+            logger.info(f"creating new file at {h5s_params_out_fpath}")
+            df_h5s = extract_sequence_params_h5s(dataset_root, inclusion_anon_ids, logger)
+            df_h5s.to_csv(h5s_params_out_fpath, index=False, sep=';')
+            logger.info(f"saved to {h5s_params_out_fpath}")
+        else:
+            logger.info(f"loading from {h5s_params_out_fpath}")
+            df_h5s = pd.read_csv(h5s_params_out_fpath, sep=';')
+        print_summarized_stats(df_h5s, cols_to_analyze_h5, seq_type=None, logger=logger)
     
     # PART 2
     # we need to read the dicom files that are in the inclusion list from the dataset_root, than we find the dicom files and extract the voxel size, FOV, TR, TE and scan time.
@@ -427,9 +495,23 @@ def main(
         logger.info(f"loading from {dcms_params_out_fpath}")
         df_dcms = pd.read_csv(dcms_params_out_fpath, sep=';')
         
-    print(df_dcms.head(10))
-    X=3
-#    print_summarized_stats_dcms(df_dcms, logger)
+    print_summarized_stats(df_dcms, cols_to_analyze_dcms, seq_type='t2w', logger=logger)
+    print_summarized_stats(df_dcms, cols_to_analyze_dcms, seq_type='dwi', logger=logger)
+    
+    
+def get_configurations():
+    return {
+            'force_new_file':        True,
+            'dataset_root':          Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data'),
+            'project_root':          Path('/scratch/hb-pca-rad/projects/03_nki_reader_study'),
+            "log_dir":               Path('/scratch/hb-pca-rad/qvl/logs'),
+            'stats_root':            Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats'),
+            'h5s_params_out_fpath':  Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/acquisition_parameters_h5s_umcg.csv'),
+            'dcms_params_out_fpath': Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/acquisition_parameters_dcms_umcg.csv'),
+            'cols_to_analyze_h5':    ['max_slices', 'receiver_channels', 'matrix_size_encodedspace_x', 'matrix_size_encodedspace_y'],
+            'cols_to_analyze_dcms':  ['recon_space', 'fov', 'slice_thickness', 'in_plane_resolution', 'tr', 'te', 'scan_duration', 'acquisition_matrix', 'patient_age', 'number_of_phase_encoding_steps', 'manufacturer_model_name'],
+            'inclusion_anon_ids':    ['ANON5046358','ANON9616598','ANON2379607','ANON8290811','ANON1586301','ANON8890538','ANON7748752','ANON1102778','ANON4982869','ANON7362087','ANON3951049','ANON9844606','ANON9843837','ANON7657657','ANON1562419','ANON4277586','ANON6964611','ANON7992094','ANON3394777','ANON3620419','ANON9724912','ANON3397001','ANON7189994','ANON9141039','ANON7649583','ANON9728185','ANON3474225','ANON0282755','ANON0369080','ANON0604912','ANON2361146','ANON9423619','ANON7041133','ANON8232550','ANON2563804','ANON3613611','ANON6365688','ANON9783006','ANON1327674','ANON9710044','ANON5517301','ANON2124757','ANON3357872','ANON1070291','ANON9719981','ANON7955208','ANON7642254','ANON0319974','ANON9972960','ANON0282398','ANON0913099','ANON7978458','ANON9840567','ANON5223499','ANON9806291','ANON5954143','ANON5895496','ANON3983890','ANON8634437','ANON6883869','ANON8828023','ANON4499321','ANON9763928','ANON9898497','ANON6073234','ANON4535412','ANON6141178','ANON8511628','ANON9534873','ANON9892116','ANON0891692','ANON9786899','ANON9941969','ANON8024204','ANON9728761','ANON4189062','ANON5642073','ANON8583296','ANON4035085','ANON7748630','ANON9883201','ANON0424679','ANON9816976','ANON8266491','ANON9310466','ANON3210850','ANON9665113','ANON0400743','ANON9223478','ANON3865800','ANON7141024','ANON7275574','ANON9629161','ANON7265874','ANON8610762','ANON0272089','ANON4747182','ANON8023509','ANON8627051','ANON5344332','ANON9879440','ANON8096961','ANON8035619','ANON1747790','ANON2666319','ANON0899488','ANON8018038','ANON7090827','ANON9752849','ANON2255419','ANON0335209','ANON7414571','ANON9604223','ANON4712664','ANON5824292','ANON2411221','ANON5958718','ANON7828652','ANON9873056','ANON3504149']
+        }
     
     
 if __name__ == "__main__":
