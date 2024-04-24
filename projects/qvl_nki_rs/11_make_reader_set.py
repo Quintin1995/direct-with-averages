@@ -5,23 +5,7 @@ import logging
 from datetime import datetime
 
 
-def get_configurations() -> dict:
-    return {
-        "root_dirs": {
-            "1x": ("rss_target_dcml.nii.gz", "rss_target_dcml.mha"),
-            "3x": ("VSharpNet_R3_recon_dcml.nii.gz", "VSharp_R3_recon_dcml.mha"),
-            "6x": ("VSharpNet_R6_recon_dcml.nii.gz", "VSharp_R6_recon_dcml.mha")
-        },
-        "inference_base_dir": Path('/scratch/p290820/projects/03_nki_reader_study/output/umcg'),
-        "target_dir": Path('/scratch/hb-pca-rad/projects/03_reader_set'),
-        "dataset_dir": Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data/'),
-        "do_copy_inferences_to_target_dir": False,
-        "do_copy_dicoms_to_target_dir": True,
-        "log_dir": Path('/scratch/hb-pca-rad/qvl/logs')
-    }
-
-
-def get_processed_patients(log_file_path):
+def read_patient_ids_from_log(log_file_path):
     if log_file_path.exists():
         with open(log_file_path, 'r') as file:
             return set(file.read().splitlines())
@@ -54,7 +38,7 @@ def create_and_save_black_image_like(reference_image: sitk.Image, target_path: P
     logger.info(f"\tBlack reference image saved at: {target_path}")
 
 
-def process_directory(
+def copy_inferences_to_target_dir(
     root_dir: Path,
     file_mapping: tuple,
     target_base_dir: Path,
@@ -95,7 +79,7 @@ def process_directory(
             # Save a black reference image if needed 
             if do_save_empty_ref and acc == "3x" and converted_image:
                 black_image_path = target_dir / f"{id}_black_ref.mha"
-                create_and_save_black_image_like(converted_image, black_image_path)
+                create_and_save_black_image_like(converted_image, black_image_path, logger)
         else:
             logger.warning(f"\tFile {source_path} not found.")
 
@@ -215,38 +199,60 @@ def find_sequence_directories(study_dir: Path, patient_id: str = None, logger: l
         else:
             logger.warning(f"Skipping unknown series directory: {series_dir.name}")
 
-    # Sort and select the T2W directory with the latest acquisition time if there are multiple
     if len(t2w_tra_dirs) > 1:
         t2w_tra_dirs = sort_t2w_tra_directories_by_creation_time(t2w_tra_dirs, study_dir, logger)
-
-        # t2w_tra_dirs = sorted(t2w_tra_dirs, 
-        #                       key=lambda x: pydicom.dcmread(next((study_dir / x).iterdir(), None), stop_before_pixels=True).InstanceCreationTime, 
-        #                       reverse=True)
         logger.info(f"Multiple T2W directories found for patient {patient_id}. Selected {t2w_tra_dirs[0]} based on latest acquisition time.")
-
-    # Ensure exactly one directory is found for each sequence type
-    # for seq_type, dirs in zip(["DWI", "ADC", "T2W TRA"], [dwi_dir, adc_dir, t2w_tra_dirs]):
-    #     assert len(dirs) == 1, f"Patient {patient_id} has {len(dirs)} {seq_type} directories. Expected exactly 1."
 
     logger.info(f"Selected sequences for patient {patient_id}:\n\tDWI: {dwi_dirs[0]},\n\tADC: {adc_dirs[0]},\n\tT2W TRA: {t2w_tra_dirs[0]}") 
     return dwi_dirs, adc_dirs, t2w_tra_dirs
 
 
-def main():
-    cfg = get_configurations()
-    processed_patients_log = cfg['log_dir'] / 'processed_patients.log'
-    processed_patients = get_processed_patients(processed_patients_log)
+def get_lesions_fnames_if_exists(pat_nif_study_dir: Path) -> list:
+    """
+    Here we will get the lesion segmentations if they exist.
     
-    logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='copy_dicoms')
-    
-    if cfg['do_copy_inferences_to_target_dir']:
-        for acc, file_mapping in cfg["root_dirs"].items():
-            root_dir = cfg["inference_base_dir"] / acc
-            process_directory(root_dir, file_mapping, cfg["target_dir"], acc, do_save_empty_ref=True, logger=logger)
+    """
+    lesion_segs = list(pat_nif_study_dir.glob('*.nii.gz')) + list(pat_nif_study_dir.glob('*.mha'))
+    return [seg.name for seg in lesion_segs if 'roi' in seg.name.lower()]
 
-    if cfg['do_copy_dicoms_to_target_dir']:
+
+def copy_reader_set_to_target_dir(
+    log_dir: Path,
+    root_dirs: dict,
+    inference_base_dir: Path,
+    target_dir: Path,
+    dataset_dir: Path,
+    do_copy_dicoms_to_target_dir: bool,
+    do_copy_inferences_to_target_dir: bool,
+    do_copy_lesion_segs: bool,
+    logger: logging.Logger = None,
+) -> None:
+    """
+    Here we will copy the dicoms and the inferences to the target directory.
+    
+    Parameters:
+    - log_dir (Path): Directory where the log file will be stored.
+    - root_dirs (dict): Dictionary containing the root directories for the different acceleration factors.
+    - inference_base_dir (Path): Base directory containing the inference directories.
+    - target_dir (Path): Base directory where the converted files will be stored.
+    - dataset_dir (Path): Base directory containing the dataset directories.
+    - do_copy_dicoms_to_target_dir (bool): Flag to copy the dicoms to the target directory.
+    - do_copy_inferences_to_target_dir (bool): Flag to copy the inferences to the target directory.
+    - do_copy_lesion_segs (bool): Flag to copy the lesion segmentations to the target directory.
+    - logger (logging.Logger): Logger instance for logging messages.
+    """
+    
+    processed_patients_log = log_dir / 'copied_patients.log'
+    processed_patients = read_patient_ids_from_log(processed_patients_log)
+    
+    if do_copy_inferences_to_target_dir:
+        for acc, file_mapping in root_dirs.items():
+            root_dir = inference_base_dir / acc
+            copy_inferences_to_target_dir(root_dir, file_mapping, target_dir, acc, do_save_empty_ref=True, logger=logger)
+
+    if do_copy_dicoms_to_target_dir:
         # we will find the corresponding nifti files in the dataset directory, copy the DWI, ADC and the T2W tra as nifti to the source dir as mha.
-        inf_dir_1x = cfg["inference_base_dir"] / "1x"
+        inf_dir_1x = inference_base_dir / "1x"
         patient_dirs = sorted(inf_dir_1x.iterdir(), key=lambda x: x.name)
         
         for idx, pat_dir in enumerate(patient_dirs):
@@ -260,27 +266,32 @@ def main():
                 continue
             
             try:
-                pat_dcm_dir = cfg["dataset_dir"] / pat_id / 'dicoms'                                    # 1. go into patient dicoms dir
+                pat_dcm_dir = dataset_dir / pat_id / 'dicoms'                                           # 1. go into patient dicoms dir
                 study_dir   = get_study_dir(pat_dcm_dir, pat_id)                                        # 2. get the study directories
                 dwi_dirs, adc_dirs, t2_tra_dirs = find_sequence_directories(study_dir, pat_id, logger)  # 3. find the sequence directories
                 
                 # Find the corresponding nifti and convert them to mha and place them in the target dir
-                pat_nif_dir = cfg["dataset_dir"] / pat_id / 'niftis'
+                pat_nif_dir = dataset_dir / pat_id / 'niftis'
                 study_dir   = get_study_dir(pat_nif_dir, pat_id)
+
+                if do_copy_lesion_segs:
+                    rois = get_lesions_fnames_if_exists(pat_nif_dir)
+                    # if the list is not empty then we will copy the lesion segmentations to the target dir
+                    # but first
                 
                 for idx, dwi_dir in enumerate(dwi_dirs):
                     source_path = pat_nif_dir / study_dir / f"{dwi_dir}.nii.gz"
-                    target_path = cfg['target_dir'] / pat_id / f"{pat_id}_dwi_dcm_{idx+1}.mha"
+                    target_path = target_dir / pat_id / f"{pat_id}_dwi_dcm_{idx+1}.mha"
                     convert_nifti_to_mha(source_path, target_path, logger)
                     
                 for idx, adc_dir in enumerate(adc_dirs):
                     source_path = pat_nif_dir / study_dir / f"{adc_dir}.nii.gz"
-                    target_path = cfg['target_dir'] / pat_id / f"{pat_id}_adc_dcm_{idx+1}.mha"
+                    target_path = target_dir / pat_id / f"{pat_id}_adc_dcm_{idx+1}.mha"
                     convert_nifti_to_mha(source_path, target_path, logger)
                     
                 for idx, t2_tra_dir in enumerate(t2_tra_dirs):
                     source_path = pat_nif_dir / study_dir / f"{t2_tra_dir}.nii.gz"
-                    target_path = cfg['target_dir'] / pat_id / f"{pat_id}_t2_tra_dcm_{idx+1}.mha"
+                    target_path = target_dir / pat_id / f"{pat_id}_t2_tra_dcm_{idx+1}.mha"
                     convert_nifti_to_mha(source_path, target_path, logger)
                     
                 log_processed_patient(processed_patients_log, pat_id)
@@ -289,5 +300,23 @@ def main():
                 raise Exception(f"Error processing {pat_id}: {e}")
 
 
+def get_configurations() -> dict:
+    return {
+        "root_dirs": {
+            "1x": ("rss_target_dcml.nii.gz", "rss_target_dcml.mha"),
+            "3x": ("VSharpNet_R3_recon_dcml.nii.gz", "VSharp_R3_recon_dcml.mha"),
+            "6x": ("VSharpNet_R6_recon_dcml.nii.gz", "VSharp_R6_recon_dcml.mha")
+        },
+        "inference_base_dir": Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/output/umcg'),
+        "target_dir":         Path('/scratch/hb-pca-rad/projects/03_reader_set_v2'),
+        "dataset_dir":        Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data/'),
+        "log_dir":            Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/logs'),
+        "do_copy_inferences_to_target_dir": False,
+        "do_copy_dicoms_to_target_dir":     True,
+        "do_copy_lesion_segs":              True,
+    }
+    
 if __name__ == "__main__":
-    main()
+    cfg = get_configurations()
+    logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='copy_dicoms_v2')
+    copy_reader_set_to_target_dir(logger=logger, **cfg)

@@ -776,6 +776,7 @@ def postprocess_all_patients(
     """
     for idx, pat_dir in enumerate(pat_dirs):
         pat_id = pat_dir.parts[-1]
+        logger.info(f"\nLoading patient {idx+1}/{len(pat_dirs)}:\nPatient ID: {pat_id}")
         hf_paths = glob.glob(str(pat_dir) + '/*.h5') # find the DL recon h5 file (vSHARP 4X recon in this case 20240207)
         
         if do_make_dicom_like:
@@ -783,7 +784,7 @@ def postprocess_all_patients(
 
         # loop over the h5 files in the patient directory we should correspond to an acquisition date with recon
         for f_idx, hf_path in enumerate(hf_paths):
-            logger.info(f"\nLoading patient {idx+1}/{len(pat_dirs)}:\nFile: {f_idx+1}/{len(hf_paths)}, {hf_path}")
+            logger.info(f"\nLoading h5s patient {idx+1}/{len(pat_dirs)}:\nFile: {f_idx+1}/{len(hf_paths)}, {hf_path}")
             
             hf = h5py.File(hf_path, 'r+')
             logger.info(f"\tHeaders of the h5 file: {list(hf.keys())}")
@@ -883,7 +884,8 @@ if __name__ == "__main__":
     logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='post_process_inference')
     
     for acceleration, pred_dir in cfg['prediction_dirs'].items():
-        logger.info(f"\n\n\nProcessing {acceleration} acceleration data at {pred_dir}")
+        print("\n\n\n")
+        logger.info(f"Processing {acceleration} acceleration data at {pred_dir}")
         postprocess_all_patients(
             pat_dirs           = get_patient_dirs(pred_dir, cfg['inclusion_list']),
             source_dir         = cfg['source_dir'],
@@ -892,4 +894,3 @@ if __name__ == "__main__":
             db_fpath           = cfg['db_fpath'],
             logger             = logger,
         )
-        
