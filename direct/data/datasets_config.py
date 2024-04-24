@@ -79,6 +79,9 @@ class H5SliceConfig(DatasetConfig):
     filenames_filter: Optional[List[str]] = None
     filenames_lists: Optional[List[str]] = None
     filenames_lists_root: Optional[str] = None
+    store_applied_acs_mask: bool = False
+    avg_collapse_strat: str = "allavg"
+
 
 
 @dataclass

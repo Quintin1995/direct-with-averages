@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) DIRECT Contributors
 
 """DIRECT datasets module."""
@@ -20,6 +21,7 @@ from torch.utils.data import Dataset, IterableDataset
 
 from direct.data.fake import FakeMRIData
 from direct.data.h5_data import H5SliceData
+from direct.data.h5_data_with_avgs import H5WithAvgsSliceData
 from direct.data.sens import simulate_sensitivity_maps
 from direct.types import PathOrString
 from direct.utils import remove_keys, str_to_class

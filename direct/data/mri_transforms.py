@@ -887,8 +887,6 @@ class EstimateSensitivityMapModule(DirectModule):
             gaussian_mask_shape[width_dim] = kspace_data.size(width_dim)
             gaussian_mask = gaussian_mask.reshape(tuple(gaussian_mask_shape))
             if "applied_acs_mask" in sample:
-                # print(f"QVL size of applied_acs_mask: {sample['applied_acs_mask'].size()}")
-                # print(f"QVL size of gaussian_mask: {gaussian_mask.size()}")
                 kspace_acs = sample["applied_acs_mask"] * gaussian_mask + 0.0
                 del sample["applied_acs_mask"]
             else:
@@ -1413,6 +1411,8 @@ class ToTensor(DirectTransform):
             sample["sampling_mask"] = torch.from_numpy(sample["sampling_mask"]).bool()
         if "acs_mask" in sample:
             sample["acs_mask"] = torch.from_numpy(sample["acs_mask"]).bool()
+        if "applied_acs_mask" in sample:
+            sample["applied_acs_mask"] = torch.tensor(sample["applied_acs_mask"]).float()
         if "scaling_factor" in sample:
             sample["scaling_factor"] = torch.tensor(sample["scaling_factor"]).float()
         if "loglikelihood_scaling" in sample:

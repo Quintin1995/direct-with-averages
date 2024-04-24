@@ -795,6 +795,7 @@ class MRIModelEngine(Engine):
             torch.cuda.empty_cache()
             gc.collect()
             filename = _get_filename_from_batch(data)
+            pat_id   = _get_pat_id_from_batch(data)
             if last_filename is None:
                 last_filename = filename  # First iteration last_filename is not set.
             if last_filename != filename:
@@ -871,8 +872,8 @@ class MRIModelEngine(Engine):
                 )
                 # Maybe not needed.
                 del data
-                yield (
-                    (curr_volume, curr_target, reduce_list_of_dicts(loss_dict_list), filename)
+                yield(
+                    (curr_volume, curr_target, reduce_list_of_dicts(loss_dict_list), filename, curr_samp_mask, pat_id)
                     if add_target
                     else (
                         curr_volume,
@@ -880,7 +881,8 @@ class MRIModelEngine(Engine):
                         filename,
                     )
                 )
-
+                
+                
     @torch.no_grad()
     def evaluate(  # type: ignore
         self,
@@ -1162,3 +1164,13 @@ def _get_filename_from_batch(data: dict) -> pathlib.Path:
         )
     # This can be fixed when there is a custom collate_fn
     return pathlib.Path(filenames[0])
+
+
+def _get_pat_id_from_batch(data: dict) -> pathlib.Path:
+    pat_ids = data["pat_id"]
+    if len(set(pat_ids)) != 1:
+        raise ValueError(
+            f"Expected a batch during validation to only contain pat_ids of one case. " f"Got {set(pat_ids)}."
+        )
+    # This can be fixed when there is a custom collate_fn
+    return pathlib.Path(pat_ids[0])

@@ -18,22 +18,6 @@ from skimage.metrics import structural_similarity
 from skimage.metrics import peak_signal_noise_ratio as psnr
 
 
-# def get_args():
-#     parser = argparse.ArgumentParser(description="Visualize validation predictions and targets side by side.")
-#     parser.add_argument("--source_dir", type=str, default=r'/scratch/p290820/datasets/003_umcg_pst_ksps', help="Root to the source dataset. Rootdir with patients with respective h5 files. Where source data can be found. The entire dataset.")
-#     parser.add_argument("--prediction_dir", type=str, default=r'/scratch/p290820/projects/03_nki_reader_study/output/umcg/test', help="Test set direcotry with prediction from the model from the test set. Run for a specific project")
-#     parser.add_argument("--make_dicom_like", action="store_true", default=True, help="Process the reconstruction with zero-padding in simulated kspace. Flipping and cropping is also applied.")
-#     parser.add_argument("--target_only", action="store_true", default=False, help="Post process after inference only the target and not the predictions of the AI model.")
-#     parser.add_argument("--start_from_pat_id", type=int, default=0, help="Starts processing the the patients with PatientID higher or equal to the given int. For example: 62, results in processing 0062_ANON1234567 and higher.")  
-#     # parser.add_argument("--debug", action="store_true", help="Set the execution type to debug for extra tests and output.")
-#     args = parser.parse_args()
-#     print("\n\nInput Arguments:")
-#     for key, value in vars(args).items():
-#         print("\t", key, ":\t", value)
-#     print("\n\n")
-#     return args
-
-
 def parse_args(verbose: bool = False):
     """
     Parse command line arguments.

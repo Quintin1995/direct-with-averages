@@ -366,7 +366,6 @@ def get_formatted_acquisition_matrix(acquisition_matrix: list) -> Tuple[int, int
         raise ValueError("Acquisition matrix list is empty or None.")
 
 
-
 def convert_scan_duration(value):
         parts = value.split(":")
         if len(parts) == 2 and "*" not in value:

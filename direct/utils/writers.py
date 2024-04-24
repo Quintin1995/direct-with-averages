@@ -7,6 +7,8 @@ from typing import Callable, DefaultDict, Dict, Optional, Union
 
 import h5py  # type: ignore
 import numpy as np
+import SimpleITK as sitk
+
 
 logger = logging.getLogger(__name__)
 
