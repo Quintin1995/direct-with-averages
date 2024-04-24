@@ -33,7 +33,7 @@ def parse_args(verbose: bool = False):
     parser.add_argument("-cfg",
                         "--config_fpath",
                         type=str,
-                        default="/home1/p290820/repos/direct/projects/qvl_nki_rs/configs/post_process_config.yaml",
+                        default="/home1/p290820/repos/direct-with-averages/projects/qvl_nki_rs/configs/post_process_config.yaml",
                         help="Path to the config file.")
     
     a = parser.parse_args()
@@ -51,13 +51,20 @@ def load_config():
     with open(args.config_fpath, 'r', encoding='UTF-8') as file:
         cfg = yaml.safe_load(file)
     
-    keys_to_make_a_path = ['source_dir', 'prediction_dir', 'logdir', 'db_fpath']
+    # Update keys that are expected to contain single path strings
+    keys_to_make_a_path = ['source_dir', 'log_dir', 'db_fpath']  # Assuming these are single paths
     for key in keys_to_make_a_path:
-        cfg[key] = Path(cfg[key])
+        if key in cfg:
+            cfg[key] = Path(cfg[key])
     
+    # Specific handling for prediction_dirs if it contains multiple paths
+    if 'prediction_dirs' in cfg:
+        cfg['prediction_dirs'] = {k: Path(v) for k, v in cfg['prediction_dirs'].items()}
+
     for k, v in cfg.items():
         print(f"{k}:\t{v}  \tdtype: {type(v)}")
     print("")
+    
     return cfg
 
 
@@ -126,7 +133,7 @@ def plot_histograms(
     save_path = os.path.join(directory, f"{outfname}.png")
     plt.savefig(save_path)
 
-    print(f"Saved plot at {save_path}")
+    logger.info(f"Saved plot at {save_path}")
 
 
 def safe_as_sitk(
@@ -217,16 +224,16 @@ def fastmri_nmse_qvl(gt: np.ndarray, pred: np.ndarray) -> float:
     return np.linalg.norm(gt - pred)**2 / np.linalg.norm(gt)**2
 
 
-def get_h5_filenames_from_dir(root_dir: str, verbose = False) -> list:
-    """Get a list of h5 filenames from a directory."""
+# def get_h5_filenames_from_dir(root_dir: str, verbose = False) -> list:
+#     """Get a list of h5 filenames from a directory."""
     
-    fnames = glob.glob(root_dir + '/*/*_pst_T2.h5')
+#     fnames = glob.glob(root_dir + '/*/*_pst_T2.h5')
 
-    if verbose:
-        print("Getting h5 filenames from: ", root_dir)
-        print("Number of h5 files: ", len(fnames))
+#     if verbose:
+#         print("Getting h5 filenames from: ", root_dir)
+#         print("Number of h5 files: ", len(fnames))
 
-    return fnames
+#     return fnames
 
 
 def process_recon(
@@ -265,67 +272,67 @@ def process_recon(
     return recon
 
 
-def process_target(fpath_h5: Path, verbose: bool = False, do_safe_as_nifti=False) -> np.ndarray:
-    """Process the target from an h5 file."""
+# def process_target(fpath_h5: Path, verbose: bool = False, do_safe_as_nifti=False) -> np.ndarray:
+#     """Process the target from an h5 file."""
     
-    hf = h5py.File(fpath_h5, 'r')
-    target = hf['target'][()]
-    modelname = hf.attrs["modelname"]
-    hf.close()
+#     hf = h5py.File(fpath_h5, 'r')
+#     target = hf['target'][()]
+#     modelname = hf.attrs["modelname"]
+#     hf.close()
 
-    if verbose:
-        print(f"\tShape of the target: {target.shape}, with dtype {target.dtype}")
+#     if verbose:
+#         print(f"\tShape of the target: {target.shape}, with dtype {target.dtype}")
 
-    if do_safe_as_nifti:
-        outfname = Path(fpath_h5)
-        parent_dir = outfname.parent
-        # recons_dir = parent_dir / 'recons'
-        # recons_dir.mkdir(exist_ok=True)  # Create 'recons' directory if it doesn't exist
-        outfname = parent_dir / f"{modelname}_target.nii.gz"
-        safe_as_sitk(
-            img            = target,
-            filename       = outfname,
-            reference_sitk = None,
-            do_hist_norm   = False,
-            verbose        = True,
-            do_round       = True
-        )
+#     if do_safe_as_nifti:
+#         outfname = Path(fpath_h5)
+#         parent_dir = outfname.parent
+#         # recons_dir = parent_dir / 'recons'
+#         # recons_dir.mkdir(exist_ok=True)  # Create 'recons' directory if it doesn't exist
+#         outfname = parent_dir / f"{modelname}_target.nii.gz"
+#         safe_as_sitk(
+#             img            = target,
+#             filename       = outfname,
+#             reference_sitk = None,
+#             do_hist_norm   = False,
+#             verbose        = True,
+#             do_round       = True
+#         )
 
-    return target
+#     return target
 
 
-def process_reconstruction_pad(
-        fpath_h5: Path,
-        do_safe_as_nifti = False,
-        verbose: bool    = False,
-    ) -> np.ndarray:
-    """
-    Process the reconstruction_pad from an h5 file.
-    The zero-padding was applied in the RIM on the real multi-coil kspace.
-    Args:
-        fpath_h5 (Path): [description]
-        verbose (bool, optional): [description]. Defaults to False.
-        do_safe_as_nifti (bool, optional): [description]. Defaults to False.
-    Returns:
-        np.ndarray: [description]
-    """
+# def process_reconstruction_pad(
+#         fpath_h5: Path,
+#         do_safe_as_nifti = False,
+#         verbose: bool    = False,
+#     ) -> np.ndarray:
+#     """
+#     Process the reconstruction_pad from an h5 file.
+#     The zero-padding was applied in the RIM on the real multi-coil kspace.
+#     Args:
+#         fpath_h5 (Path): [description]
+#         verbose (bool, optional): [description]. Defaults to False.
+#         do_safe_as_nifti (bool, optional): [description]. Defaults to False.
+#     Returns:
+#         np.ndarray: [description]
+#     """
     
-    hf = h5py.File(fpath_h5, 'r')
-    recon_pad = hf['reconstruction_pad'][()]
-    hf.close()
+#     hf = h5py.File(fpath_h5, 'r')
+#     recon_pad = hf['reconstruction_pad'][()]
+#     hf.close()
 
-    if verbose:
-        print(f"\tShape of the reconstruction_pad: {recon_pad.shape}, with dtype {recon_pad.dtype}")
+#     if verbose:
+#         print(f"\tShape of the reconstruction_pad: {recon_pad.shape}, with dtype {recon_pad.dtype}")
 
-    if do_safe_as_nifti:
-        outfname = Path(fpath_h5)
-        outfname = outfname.with_name(outfname.stem + "_recon_pad_real_ksp.nii.gz")
-        safe_as_sitk(recon_pad, outfname, verbose=True)
+#     if do_safe_as_nifti:
+#         outfname = Path(fpath_h5)
+#         outfname = outfname.with_name(outfname.stem + "_recon_pad_real_ksp.nii.gz")
+#         safe_as_sitk(recon_pad, outfname, verbose=True)
 
-    return recon_pad
+#     return recon_pad
 
 
-def add_vis_qual_metrics_to_h5(hf: h5py, recon: np.ndarray, target: np.ndarray, verbose=False) -> None:
+def add_vis_qual_metrics_to_h5(hf: h5py, recon: np.ndarray, target: np.ndarray, logger: Optional[logging.Logger] = None):
     """Add SSIM, PSNR, and NMSE to the h5 file."""
 
     if 'ssim' not in hf.attrs.keys():
@@ -337,8 +344,8 @@ def add_vis_qual_metrics_to_h5(hf: h5py, recon: np.ndarray, target: np.ndarray, 
     if 'nmse' not in hf.attrs.keys():
         hf.attrs['nmse'] = fastmri_nmse_qvl(target, recon)
     
-    if verbose:
-        print(f"\tSSIM: {hf.attrs['ssim']:.4f}, PSNR: {hf.attrs['psnr']:.4f}, NMSE: {hf.attrs['nmse']:.4f}")
+    if logger:
+        logger.info(f"\tSSIM: {hf.attrs['ssim']:.4f}, PSNR: {hf.attrs['psnr']:.4f}, NMSE: {hf.attrs['nmse']:.4f}")
 
 
 def save_slice_as_greyscale(arr: np.ndarray, slice_idx: int = 15, verbose: bool = False, dir='/home1/p290820/tmp/006_ksp_zero_padding_sim_ksp_and_post_process_recon', title="") -> None:
@@ -706,16 +713,15 @@ def find_respective_dicom_dir(
     db_fpath: Path = None,
 ) -> str:
     
-    db_patient_id = pat_id.split('_')[-1]
-    logger.info(f"Db patient ID: {db_patient_id}")
-    # db_path = source_dir / 'database' / 'dbs' / 'master_habrok_20231106.db'
+    anon_id = pat_id.split('_')[-1]
+    logger.info(f"Db patient ID: {anon_id}")
     
     conn = sqlite3.connect(str(db_fpath))
     cursor = conn.cursor()
     try:
         # Query to retrieve all MRI dates for the given patient ID
         query = "SELECT mri_date FROM kspace_dset_info WHERE anon_id = ? ORDER BY mri_date"
-        cursor.execute(query, (db_patient_id,))
+        cursor.execute(query, (anon_id,))
         results = cursor.fetchall()
         logger.info(f"\tResults from the query: {results}")
                 
@@ -792,7 +798,7 @@ def postprocess_all_patients(
             hf.close()
 
             # Add the metrics to the h5 file
-            # add_vis_qual_metrics_to_h5(hf=hf_pred, recon=recon, target=target, verbose=True)
+            # add_vis_qual_metrics_to_h5(hf=hf_pred, recon=recon, target=target, logger=logger)
             
             if do_make_dicom_like:
                 recon_dicom_like  = make_dicom_like(dicom_dir, recon, verbose = True, logger=logger) if not target_only else None
@@ -826,7 +832,7 @@ def postprocess_all_patients(
             # add_vis_qual_met_to_h5_dicom_like(hf=hf_pred, recon=recon_dicom_like, target=target_dicom_like, verbose=True)
 
 
-def setup_logger(log_dir: Path, use_time: bool = True) -> logging.Logger:
+def setup_logger(log_dir: Path, use_time: bool = True, part_fname: str = None) -> logging.Logger:
     """
     Configure logging to both console and file.
     This function sets up logging based on the specified logging directory.
@@ -840,6 +846,10 @@ def setup_logger(log_dir: Path, use_time: bool = True) -> logging.Logger:
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     if use_time: 
         log_file = log_dir / f"log_{current_time}.log"
+    elif part_fname is not None and use_time: 
+        log_file = log_dir / f"log_{part_fname}_{current_time}.log"
+    elif part_fname is not None and not use_time:
+        log_file = log_dir / f"log_{part_fname}.log"
     else:
         log_file = log_dir / "log.log"
 
@@ -857,6 +867,7 @@ def setup_logger(log_dir: Path, use_time: bool = True) -> logging.Logger:
 
     return l
 
+
 ####################################################################################################
 # Description:
 # Post-process the reconstructions from the vSHARP model.
@@ -869,18 +880,16 @@ def setup_logger(log_dir: Path, use_time: bool = True) -> logging.Logger:
 # 5. The reconstructions are evaluated using the SSIM, PSNR, and NMSE metrics on the dicom-like reconstructions.
 if __name__ == "__main__":
     cfg = load_config()
+    logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='post_process_inference')
     
-    logger = setup_logger(cfg['logdir'], use_time=False)
-    
-    # The root dir with all the patient directories.
-    pat_dirs = get_patient_dirs(cfg['prediction_dir'], cfg['inclusion_list'])
-
-    postprocess_all_patients(
-        pat_dirs           = pat_dirs,
-        source_dir         = cfg['source_dir'],
-        do_make_dicom_like = cfg['make_dicom_like'],
-        target_only        = cfg['target_only'],
-        db_fpath           = cfg['db_fpath'],
-        logger             = logger,
-    )
-    
+    for acceleration, pred_dir in cfg['prediction_dirs'].items():
+        logger.info(f"\n\n\nProcessing {acceleration} acceleration data at {pred_dir}")
+        postprocess_all_patients(
+            pat_dirs           = get_patient_dirs(pred_dir, cfg['inclusion_list']),
+            source_dir         = cfg['source_dir'],
+            do_make_dicom_like = cfg['make_dicom_like'],
+            target_only        = cfg['target_only'],
+            db_fpath           = cfg['db_fpath'],
+            logger             = logger,
+        )
+        
