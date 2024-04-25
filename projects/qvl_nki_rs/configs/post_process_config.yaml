@@ -148,7 +148,7 @@ inclusion_list: #null
   # - "0132"
   # - "0133"
   # - "0134"
-  - "0135"
+####  - "0135"        # t2ddicom with adc/dwi=GOOD | recon with t2dicom=GOOD
   # - "0136"
   # - "0137"
   # - "0138"
@@ -156,33 +156,33 @@ inclusion_list: #null
   # - "0140"
   # - "0141"
   # - "0142"
-  # - "0143"    # has multiple study dates that interfered.
+  # - "0143"   
   # - "0144"
   # - "0145"
   # - "0146"
-  # - "0147"    # has multiple study dates that interfered.
-  # - "0148"    # has multiple study dates that interfered. 
-  # - "0149"    # has multiple study dates that interfered.
+  # - "0147"
+  # - "0148" 
+  # - "0149"
   # - "0150"
-  # - "0151"    # has multiple study dates that interfered.
-  - "0152"
+  # - "0151"
+####  - "0152"      # t2ddicom with adc/dwi=GOOD | recon with t2dicom=GOOD
   # - "0153"
   # - "0154"
   # - "0155"
   # - "0156"
   # - "0157"
-  # - "0158"      # has multiple study dates that interfered.
-  # - "0159"      # has multiple study dates that interfered.
+  # - "0158"
+  # - "0159"
   # - "0160"
-  # - "0161"      # has multiple study dates that interfered.
+  # - "0161"
   # - "0162"
   # - "0163"
-  # - "0164"  # has multiple study dates that interfered.
+  # - "0164"
   # - "0165"
   # - "0166"
   # - "0167"
   # - "0168"
   # - "0169"
-  # - "0170"  # has multiple study dates that interfered.
-  # - "0171"  # has multiple study dates that interfered.
-  # - "0172"  # has multiple study dates that interfered.
+  # - "0170"
+  # - "0171"
+  # - "0172"

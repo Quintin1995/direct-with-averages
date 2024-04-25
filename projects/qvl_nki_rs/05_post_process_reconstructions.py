@@ -862,7 +862,6 @@ def postprocess_all_patients(
             logger.info(f"\tShape of the target_dicom_like: {target_dicom_like.shape}, with dtype {target_dicom_like.dtype}")
 
 
-
 def setup_logger(log_dir: Path, use_time: bool = True, part_fname: str = None) -> logging.Logger:
     """
     Configure logging to both console and file.
