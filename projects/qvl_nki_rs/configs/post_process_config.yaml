@@ -1,5 +1,5 @@
 source_dir: '/scratch/p290820/datasets/003_umcg_pst_ksps'        # Where the kspace data is stored
-make_dicom_like: true                                            # Make recon dicom-like based on shape from header information
+do_make_dicom_like: true                                         # Make recon dicom-like based on shape from header information
 target_only: false                                               # only process the target
 log_dir: '/scratch/hb-pca-rad/projects/03_nki_reader_study/logs' # The path to the log directory
 
@@ -21,7 +21,7 @@ inclusion_list: #null
   # - "0005"
   # - "0006"
   # - "0007"
-  - "0008"
+ #### - "0008"      # t2ddicom with adc/dwi=ACCEPTABLE | recon with t2dicom=EXTRA_CHECK    (EXTRA CHECK = GOOD)
   # - "0009"
   # - "0010"
   # - "0011"
@@ -39,7 +39,7 @@ inclusion_list: #null
   # - "0023"
   # - "0024"
   # - "0025"
-  - "0026"
+ #### - "0026"      # t2ddicom with adc/dwi=ACCEPTABLE | recon with t2dicom=WRONG   (FIX ATTEMPT)
   # - "0027"
   # - "0028"
   # - "0029"
@@ -56,11 +56,11 @@ inclusion_list: #null
   # - "0040"
   # - "0041"
   # - "0042"
-  - "0043"
+####  - "0043"      # t2ddicom with adc/dwi=GOOD | recon with t2dicom=GOOD
   # - "0044"
   # - "0045"
   # - "0046"
-  - "0047"
+####  - "0047"      # t2ddicom with adc/dwi=GOOD | recon with t2dicom=ACCEPTABLE
   # - "0048"
   # - "0049"
   # - "0050"
@@ -71,7 +71,7 @@ inclusion_list: #null
   # - "0055"
   # - "0056"
   # - "0057"
-  - "0058"
+####  - "0058"      # t2ddicom with adc/dwi=EXTRA_CHECK | recon with t2dicom=WRONG    (SEEMS FINE NOW)     
   # - "0059"
   # - "0060"
   # - "0061"
@@ -81,7 +81,7 @@ inclusion_list: #null
   # - "0065"
   # - "0066"
   # - "0067"
-  - "0068"
+####  - "0068"      # t2ddicom with adc/dwi=GOOD | recon with t2dicom=ACCEPTABLE     (CHECK SEEMS FINE)
   # - "0069"
   # - "0070"
   # - "0071"
@@ -90,13 +90,13 @@ inclusion_list: #null
   # - "0074"
   # - "0075"
   # - "0076"
-  - "0077"
+####  - "0077"      # t2ddicom with adc/dwi=ACCEPTABLE | recon with t2dicom=ACCEPTABLE    (SEEMS FINE, dicom seems blurry but not the recon)
   # - "0078"
   # - "0079"
   # - "0080"
   # - "0081"
   # - "0082"
-  - "0083"
+#### - "0083"       # t2ddicom with adc/dwi=GOOD | recon with t2dicom=GOOD
   # - "0084"
   # - "0085"
   # - "0086"
@@ -110,7 +110,7 @@ inclusion_list: #null
   # - "0094"
   # - "0095"
   # - "0096"
-  - "0097"
+####  - "0097"      # t2ddicom with adc/dwi=GOOD | recon with t2dicom=ACCEPTABLE             (CHECK SEEMS FINE)
   # - "0098"
   # - "0099"
   # - "0100"
@@ -137,7 +137,7 @@ inclusion_list: #null
   # - "0121"
   # - "0122"
   # - "0123"
-  - "0124"
+####  - "0124"      # t2ddicom with adc/dwi=GOOD | recon with t2dicom=GOOD   (CHECK SEEMS FINE)     
   # - "0125"
   # - "0126"
   # - "0127"

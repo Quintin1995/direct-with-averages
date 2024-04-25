@@ -2,6 +2,7 @@ from pathlib import Path
 import SimpleITK as sitk
 import pydicom
 import logging
+from typing import List
 from datetime import datetime
 
 
@@ -178,7 +179,7 @@ def sort_t2w_tra_directories_by_creation_time(t2w_tra_directories, study_directo
     return sorted_t2w_tra_directories
 
 
-def find_sequence_directories(study_dir: Path, patient_id: str = None, logger: logging.Logger = None) -> tuple:
+def find_sequence_directories_dcm(study_dir: Path, patient_id: str = None, logger: logging.Logger = None) -> tuple:
     series_dirs = list(study_dir.iterdir())
     dwi_dirs, adc_dirs, t2w_tra_dirs = [], [], []
 
@@ -213,7 +214,69 @@ def get_lesions_fnames_if_exists(pat_nif_study_dir: Path) -> list:
     
     """
     lesion_segs = list(pat_nif_study_dir.glob('*.nii.gz')) + list(pat_nif_study_dir.glob('*.mha'))
-    return [seg.name for seg in lesion_segs if 'roi' in seg.name.lower()]
+    lesion_segs = [seg for seg in lesion_segs if 'roi' in seg.name.lower()]
+    return lesion_segs
+
+
+def resample_to_reference(
+    image: sitk.Image, 
+    ref_img: sitk.Image, 
+    interpolator = sitk.sitkNearestNeighbor, 
+    default_pixel_value: float = 0
+) -> sitk.Image:
+    """
+    Automatically aligns, resamples, and crops an SITK image to a
+    reference image. Can be either from .mha or .nii.gz files.
+
+    Parameters:
+    `image`: The moving image to align
+    `ref_img`: The reference image with desired spacing, crop size, etc.
+    `interpolator`: SITK interpolator for resampling
+    `default_pixel_value`: Pixel value for voxels outside of original image
+    """
+    resampled_img = sitk.Resample(image, ref_img, 
+            sitk.Transform(), 
+            interpolator, default_pixel_value, 
+            ref_img.GetPixelID())
+    return resampled_img
+
+
+def resample_and_save_roi_images(study_dir: Path, source_path: Path, target_dir: Path, pat_id: str, logger: logging.Logger):
+    """
+    Here we will resample the lesion segmentations to the reference image and save them.
+    
+    Parameters:
+    - study_dir (Path): Study directory containing the lesion segmentations.
+    - source_path (Path): Source path for the reference image.
+    - target_dir (Path): Target directory where the resampled images will be stored.
+    - pat_id (str): Patient ID.
+    """
+    roi_fpaths = get_lesions_fnames_if_exists(study_dir)
+    for idx, roi_f in enumerate(roi_fpaths):
+        # read the image with sitk and resample it to the last source path
+        roi = sitk.ReadImage(str(roi_f))
+        ref_img = sitk.ReadImage(str(source_path))
+        resampled_roi = resample_to_reference(roi, ref_img)
+        # write the image to target and called it roi1.mha, roi2.mha, etc.
+        roiname = roi_f.stem.split('.')
+        target_path = target_dir / pat_id / f"{pat_id}_{roiname[0].lower()}_{idx+1}.mha"
+        sitk.WriteImage(resampled_roi, str(target_path))
+        logger.info(f"Resampled and saved {roi_f} to {target_path}")
+
+
+def convert_niftis_to_mha(
+    dirs: List[Path],
+    dir_type: str,
+    pat_nif_dir: Path,
+    study_dir: Path,
+    target_dir: Path,
+    pat_id: str,
+    logger: logging.Logger
+):
+    for idx, dir in enumerate(dirs):
+        source_path = pat_nif_dir / study_dir / f"{dir}.nii.gz"
+        target_path = target_dir / pat_id / f"{pat_id}_{dir_type}_dcm_{idx+1}.mha"
+        convert_nifti_to_mha(source_path, target_path, logger)
 
 
 def copy_reader_set_to_target_dir(
@@ -241,15 +304,16 @@ def copy_reader_set_to_target_dir(
     - do_copy_lesion_segs (bool): Flag to copy the lesion segmentations to the target directory.
     - logger (logging.Logger): Logger instance for logging messages.
     """
-    
     processed_patients_log = log_dir / 'copied_patients.log'
     processed_patients = read_patient_ids_from_log(processed_patients_log)
     
+    # Phase 1 - Copy Inferences
     if do_copy_inferences_to_target_dir:
         for acc, file_mapping in root_dirs.items():
             root_dir = inference_base_dir / acc
             copy_inferences_to_target_dir(root_dir, file_mapping, target_dir, acc, do_save_empty_ref=True, logger=logger)
 
+    # Phase 2 - Copy Dicoms and Lesion Segs
     if do_copy_dicoms_to_target_dir:
         # we will find the corresponding nifti files in the dataset directory, copy the DWI, ADC and the T2W tra as nifti to the source dir as mha.
         inf_dir_1x = inference_base_dir / "1x"
@@ -260,40 +324,29 @@ def copy_reader_set_to_target_dir(
                 continue
             pat_id = pat_dir.name
             logger.info(f"\n\n\tProcessing patient {pat_id}.\t {idx + 1}/{len(list(inf_dir_1x.iterdir()))}")
-            
             if pat_id in processed_patients:
                 logger.info(f"\tSkipping already processed patient {pat_id}")
                 continue
             
             try:
-                pat_dcm_dir = dataset_dir / pat_id / 'dicoms'                                           # 1. go into patient dicoms dir
-                study_dir   = get_study_dir(pat_dcm_dir, pat_id)                                        # 2. get the study directories
-                dwi_dirs, adc_dirs, t2_tra_dirs = find_sequence_directories(study_dir, pat_id, logger)  # 3. find the sequence directories
+                pat_dcm_dir     = dataset_dir / pat_id / 'dicoms'                                               # 1. go into patient dicoms dir
+                study_dir_dcm   = get_study_dir(pat_dcm_dir, pat_id)                                            # 2. get the study dcm directories
+                pat_nif_dir     = dataset_dir / pat_id / 'niftis'                                               # 4. go into patient niftis dir
+                study_dir_nif   = get_study_dir(pat_nif_dir, pat_id)                                            # 5. get the study nif directories
+                dwi_dirs, adc_dirs, t2_tra_dirs = find_sequence_directories_dcm(study_dir_dcm, pat_id, logger)  # 3. find the sequence directories
                 
-                # Find the corresponding nifti and convert them to mha and place them in the target dir
-                pat_nif_dir = dataset_dir / pat_id / 'niftis'
-                study_dir   = get_study_dir(pat_nif_dir, pat_id)
-
+                assert len(dwi_dirs) == 1, f"Error: {pat_id} has {len(dwi_dirs)} DWI directories. We didnt find exactly 1 DWI dir for patient {pat_id}."
+                assert len(adc_dirs) == 1, f"Error: {pat_id} has {len(adc_dirs)} ADC directories. We didnt find exactly 1 ADC dir for patient {pat_id}."
+                assert len(t2_tra_dirs) == 1, f"Error: {pat_id} has {len(t2_tra_dirs)} T2W TRA directories. We didnt find exactly 1 T2W TRA dir for patient {pat_id}."
+                
+                convert_niftis_to_mha(dwi_dirs,    'dwi',    pat_nif_dir, study_dir_nif, target_dir, pat_id, logger)
+                convert_niftis_to_mha(adc_dirs,    'adc',    pat_nif_dir, study_dir_nif, target_dir, pat_id, logger)
+                convert_niftis_to_mha(t2_tra_dirs, 't2_tra', pat_nif_dir, study_dir_nif, target_dir, pat_id, logger)
+                
                 if do_copy_lesion_segs:
-                    rois = get_lesions_fnames_if_exists(pat_nif_dir)
-                    # if the list is not empty then we will copy the lesion segmentations to the target dir
-                    # but first
-                
-                for idx, dwi_dir in enumerate(dwi_dirs):
-                    source_path = pat_nif_dir / study_dir / f"{dwi_dir}.nii.gz"
-                    target_path = target_dir / pat_id / f"{pat_id}_dwi_dcm_{idx+1}.mha"
-                    convert_nifti_to_mha(source_path, target_path, logger)
-                    
-                for idx, adc_dir in enumerate(adc_dirs):
-                    source_path = pat_nif_dir / study_dir / f"{adc_dir}.nii.gz"
-                    target_path = target_dir / pat_id / f"{pat_id}_adc_dcm_{idx+1}.mha"
-                    convert_nifti_to_mha(source_path, target_path, logger)
-                    
-                for idx, t2_tra_dir in enumerate(t2_tra_dirs):
-                    source_path = pat_nif_dir / study_dir / f"{t2_tra_dir}.nii.gz"
-                    target_path = target_dir / pat_id / f"{pat_id}_t2_tra_dcm_{idx+1}.mha"
-                    convert_nifti_to_mha(source_path, target_path, logger)
-                    
+                    source_path = pat_nif_dir / study_dir_nif / f"{t2_tra_dirs[0]}.nii.gz"
+                    resample_and_save_roi_images(study_dir_nif, source_path, target_dir, pat_id, logger)
+                        
                 log_processed_patient(processed_patients_log, pat_id)
             except Exception as e:
                 logger.error(f"\tError processing {pat_id}: {e}")

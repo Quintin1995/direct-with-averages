@@ -756,6 +756,19 @@ def find_respective_dicom_dir(
         conn.close()
 
 
+def apply_transform_and_save_image(transform_fpath: Path, image_fname: str, output_fname: str, pat_dir: Path, logger: logging.Logger = None) -> None:
+    """Applies a given transform to an image and saves the result with a specified filename."""
+    if transform_fpath.exists():
+        image_path = pat_dir / image_fname
+        output_path = pat_dir / output_fname
+
+        image = sitk.ReadImage(str(image_path))
+        trans = sitk.ReadTransform(str(transform_fpath))
+        image_transformed = sitk.Resample(image, trans)
+        sitk.WriteImage(image_transformed, str(output_path))
+        logger.info(f"\tTransformed image saved as: {output_path}")
+        
+
 def postprocess_all_patients(
     pat_dirs: List[Path],
     source_dir: Path         = None,
@@ -824,13 +837,30 @@ def postprocess_all_patients(
                     logger         = logger,
                     verbose        = True,
                 )
-
+                
+                # Apply transform if it exists and save the reconstruction image
+                apply_transform_and_save_image(
+                    transform_fpath = source_dir / 'data' / pat_id / 'transforms' / 'transform_recon_to_dicom.txt',
+                    image_fname     = f"{modelname}_R{acc_fac}_recon_dcml.nii.gz",
+                    output_fname    = f"{modelname}_R{acc_fac}_recon_dcml_trans.nii.gz",
+                    pat_dir         = pat_dir,
+                    logger          = logger,
+                )
+                apply_transform_and_save_image(
+                    transform_fpath = source_dir / 'data' / pat_id / 'transforms' / 'transform_recon_to_dicom.txt',
+                    image_fname     = "rss_target_dcml.nii.gz",
+                    output_fname    = "rss_target_dcml_trans.nii.gz",
+                    pat_dir         = pat_dir,
+                    logger          = logger,
+                )
+            # if add_vis_qual_met_to_h5:
+                # add_vis_qual_met_to_h5_dicom_like(hf=hf_pred, recon=recon_dicom_like, target=target_dicom_like, verbose=True)
+                    
             logger.info(f"\tShape of the recon: {recon.shape}, with dtype {recon.dtype}") if not target_only else None
             logger.info(f"\tShape of the target: {target.shape}, with dtype {target.dtype}")
             logger.info(f"\tShape of the recon_dicom_like: {recon_dicom_like.shape}, with dtype {recon_dicom_like.dtype}") if not target_only else None
             logger.info(f"\tShape of the target_dicom_like: {target_dicom_like.shape}, with dtype {target_dicom_like.dtype}")
 
-            # add_vis_qual_met_to_h5_dicom_like(hf=hf_pred, recon=recon_dicom_like, target=target_dicom_like, verbose=True)
 
 
 def setup_logger(log_dir: Path, use_time: bool = True, part_fname: str = None) -> logging.Logger:
@@ -889,7 +919,7 @@ if __name__ == "__main__":
         postprocess_all_patients(
             pat_dirs           = get_patient_dirs(pred_dir, cfg['inclusion_list']),
             source_dir         = cfg['source_dir'],
-            do_make_dicom_like = cfg['make_dicom_like'],
+            do_make_dicom_like = cfg['do_make_dicom_like'],
             target_only        = cfg['target_only'],
             db_fpath           = cfg['db_fpath'],
             logger             = logger,
