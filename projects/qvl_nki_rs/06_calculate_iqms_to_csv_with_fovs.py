@@ -52,7 +52,7 @@ def setup_logger(log_dir: Path, use_time: bool = True, part_fname: str = None) -
     return l
 
 
-def filter_patient_dirs(rootdir: Path, include_list: list, logger: logging.Logger = None, do_sort: bool = True) -> list:
+def filter_patient_dirs(rootdir: Path, include_list: list, logger: logging.Logger = None) -> list:
     """
     Get the patient directories that are relevant for the analysis.
     
@@ -65,20 +65,14 @@ def filter_patient_dirs(rootdir: Path, include_list: list, logger: logging.Logge
     """
     
     patients_dirs = [x for x in rootdir.iterdir() if x.is_dir()]
-    
-    # only consider directories of the type '0053_ANON123456789'
-    patients_dirs = [x for x in patients_dirs if x.name not in ['archive', 'exclusie']]
-    patients_dirs = [x for x in patients_dirs if len(x.name.split('_')) == 2]
-    
+
     # Filter out  patients not in the include_list
     if include_list is not None:
         patients_dirs = [x for x in patients_dirs if any([y in x.name for y in include_list])]
     
-    if do_sort:     # sort them based ont he x.name.split[0] as integer values
-        patients_dirs = sorted(patients_dirs, key=lambda x: int(x.name.split('_')[0]))
-        
     if logger:
         logger.info(f"Found {len(patients_dirs)} patient directories in {rootdir}")
+        logger.info(f"Patients directories: {patients_dirs}")
 
     return patients_dirs
 
@@ -295,35 +289,29 @@ def calculate_image_quality_metrics(
     target: np.ndarray,
     pat_dir: Path,
     acceleration: int,
-    iqms: List[str],
-    fov: str = None,
     decimals: int = 3,
+    fov: str = None,
     logger: logging.Logger = None,
 ) -> dict:
     
-    metrics = {}
-    for iqm in iqms:
-        if iqm == 'ssim':
-            metrics['ssim'] = round(fastmri_ssim_qvl(gt=target, pred=recon), decimals)
-        elif iqm == 'psnr':
-            metrics['psnr'] = round(fastmri_psnr_qvl(gt=target, pred=recon), decimals)
-        elif iqm == 'nmse':
-            metrics['nmse'] = round(fastmri_nmse_qvl(gt=target, pred=recon), decimals)
-        elif iqm == 'vofl':
-            metrics['vofl'] = round(blurriness_metric(image=recon), decimals)
+    # Compute image quality metrics (IQMs)
+    ssim_iqm = fastmri_ssim_qvl(gt=target, pred=recon)
+    psnr_iqm = fastmri_psnr_qvl(gt=target, pred=recon)
+    nmse_iqm = fastmri_nmse_qvl(gt=target, pred=recon)
+    vofl_iqm = blurriness_metric(image=recon)
 
-    if logger is not None:
-        log_msg = "\t\t" + ", ".join([f"{iqm.upper()}: {metrics[iqm]:.{decimals}f}" for iqm in iqms if iqm in metrics])
-        logger.info(f"{log_msg}\n")
+    logger.info(f"\t\tSSIM: {ssim_iqm:.3f}, PSNR: {psnr_iqm:.3f}, NMSE: {nmse_iqm:.3f}, VOFL: {vofl_iqm:.3f}\n")
 
+    # Prepare data for DataFrame
     data = {
         'pat_id':       pat_dir.name,
         'acceleration': acceleration,
+        'ssim':         round(ssim_iqm, decimals),
+        'psnr':         round(psnr_iqm, decimals),
+        'nmse':         round(nmse_iqm, decimals),
+        'vofl':         round(vofl_iqm, decimals),
+        'roi':          fov,
     }
-    data.update(metrics)  # Add the computed metrics to the data dictionary
-    if fov is not None:
-        data['roi'] = fov
-    
     return data
 
 
@@ -333,32 +321,15 @@ def calculate_iqm_and_add_to_df(
     target: np.ndarray,
     pat_dir: Path,
     acc: int,
-    iqms: List[str],
     fov: str,
     decimals: int = 3,
     logger: logging.Logger = None,
 ) -> pd.DataFrame:
-    """
-    Calculate the image quality metrics (IQMs) for the DLRecon images. The accelerated image are compared to the
-    target images. We calculate the IQMs for the images and add them to the DataFrame.
-    
-    Parameters:
-    - df (pd.DataFrame): The DataFrame to which the IQMs will be added
-    - recon (np.ndarray): The reconstruction volume
-    - target (np.ndarray): The target volume
-    - pat_dir (Path): The patient directory
-    - acc (int): The acceleration factor
-    - iqms (List[str]): The list of IQMs to calculate
-    - fov (str): The field of view (abfov, prfov, lsfov)
-    - decimals (int): The number of decimals to round the IQMs to
-    - logger (logging.Logger): The logger instance
-    """	
     iqms_dict = calculate_image_quality_metrics(
         recon        = recon,
         target       = target,
         pat_dir      = pat_dir,
         acceleration = acc,
-        iqms         = iqms,
         fov          = fov,
         decimals     = decimals,
         logger       = logger,
@@ -393,7 +364,7 @@ def load_nifti_as_array(nifti_path: Path) -> np.ndarray:
     Returns:
     - img (np.ndarray): The NIfTI file as a NumPy array.
     """
-    img  = sitk.ReadImage(str(nifti_path))
+    img  = sitk.ReadImage(nifti_path)
     img  = sitk.GetArrayFromImage(img)
     return img
 
@@ -631,9 +602,7 @@ def calculate_iqms_on_all_patients(
     patients_dir: Path,
     include_list: list,
     accelerations: list,
-    iqms: List[str],
     do_ssim_map: bool = False,
-    decimals: int = 3,
     logger: logging.Logger = None,
 ) -> pd.DataFrame:
     """
@@ -654,22 +623,45 @@ def calculate_iqms_on_all_patients(
     for pat_idx, pat_dir in enumerate(pat_dirs):
         logger.info(f"Processing patient {pat_idx+1}/{len(pat_dirs)}: {pat_dir.name}")
 
-        # Load the target, ROIs and then the reconstructions
-        # roi_fpaths = [x for x in pat_dir.iterdir() if "roi" in x.name.lower()]
-        target_fpath = [x for x in pat_dir.iterdir() if "rss_target_dcml" in x.name.lower()][0]
-        target = load_nifti_as_array(target_fpath)
+        roi_fpaths = [x for x in pat_dir.iterdir() if "roi" in x.name.lower()]
         for acc in accelerations:
             logger.info(f"\tProcessing acceleration: {acc}")
-            recon_fpath = [x for x in pat_dir.iterdir() if f"vsharp_r{acc}_recon_dcml" in x.name.lower()][0]
-            recon  = load_nifti_as_array(recon_fpath)
-            df = calculate_iqm_and_add_to_df(df, recon, target, pat_dir, acc, iqms, "prfov", decimals, logger)
+
+            # REFACTORED UNTIL HERE
+            # REFACTORED UNTIL HERE
+            # REFACTORED UNTIL HERE
             
+            # ABDOMINAL FOV (abfov) - Add the IQMs to the DataFrame
+            recon_abfov  = load_nifti_as_array(nifti_path = str(pat_dir / "recons" / f"RIM_R{acc}_recon_{pat_dir.name}_pst_T2_recon.nii.gz"))
+            target_abfov = load_nifti_as_array(nifti_path = str(pat_dir / "recons" / f"RIM_R{acc}_recon_{pat_dir.name}_pst_T2_target.nii.gz"))
+            df = calculate_iqm_and_add_to_df( 
+                df           = df,
+                recon        = recon_abfov,
+                target       = target_abfov,
+                pat_dir      = pat_dir,
+                acc          = acc,
+                fov          = "abfov",
+                logger       = logger,
+            )
+            
+            # PROSTATE FOV (prfov) - Add the IQMs to the DataFrame
+            recon_prfov  = load_nifti_as_array(nifti_path = str(pat_dir / "recons" / f"RIM_R{acc}_recon_{pat_dir.name}_pst_T2_dcml_recon.nii.gz"))
+            target_prfov = load_nifti_as_array(nifti_path = str(pat_dir / "recons" / f"RIM_R{acc}_recon_{pat_dir.name}_pst_T2_dcml_target.nii.gz"))
+            df = calculate_iqm_and_add_to_df(
+                df           = df,
+                recon        = recon_prfov,
+                target       = target_prfov,
+                pat_dir      = pat_dir,
+                acc          = acc,
+                fov          = "prfov",
+                logger       = logger,
+            )
             # Calculate an SSIM map of the reconstruction versus the target
+            ref_nifti = sitk.ReadImage(str(pat_dir / "recons" / f"RIM_R{acc}_recon_{pat_dir.name}_pst_T2_dcml_target.nii.gz"))
             if do_ssim_map:
-                ref_nifti = sitk.ReadImage(str(pat_dir / "recons" / f"RIM_R{acc}_recon_{pat_dir.name}_pst_T2_dcml_target.nii.gz"))
                 calculate_and_save_ssim_map_3d(
-                    target      = target,
-                    recon       = recon,
+                    target      = target_prfov,
+                    recon       = recon_prfov,
                     output_dir  = pat_dir / "metric_maps",
                     patient_id  = pat_dir.name,
                     acc_factor  = acc,
@@ -679,6 +671,38 @@ def calculate_iqms_on_all_patients(
                     ref_nifti   = ref_nifti,
                     metric      = 'ssim',
                 )
+
+            # LESION FOV (lsfov) - Add the IQMs to the DataFrame
+            ref_nifti = sitk.ReadImage(str(pat_dir / "recons" / f"RIM_R{acc}_recon_{pat_dir.name}_pst_T2_dcml_target.nii.gz"))
+            for seg_idx, seg_fpath in enumerate(roi_fpaths):
+                logger.info(f"\t\tProcessing ROI {seg_idx+1}/{len(roi_fpaths)}: {seg_fpath.name}")
+                df, seg_bb = process_lesion_fov(
+                    df        = df,
+                    seg_idx   = seg_idx,
+                    recon     = recon_prfov,
+                    target    = target_prfov,
+                    seg_fpath = seg_fpath,
+                    ref_nifti = ref_nifti,
+                    pat_dir   = pat_dir,
+                    acc       = acc,
+                    is_mirror = False,
+                )
+
+            # LESION FOV MIRRORED (lsfov_mirrored) - Add the IQMs to the DataFrame
+            for seg_idx, seg_fpath in enumerate(roi_fpaths):
+                logger.info(f"\t\tProcessing control mirrored ROI {seg_idx+1}/{len(roi_fpaths)}: {seg_fpath.name}")
+                df, seg_bb = process_lesion_fov(
+                    df        = df,
+                    seg_idx   = seg_idx,
+                    recon     = np.flip(recon_prfov, axis=2),
+                    target    = np.flip(target_prfov, axis=2),
+                    seg_fpath = seg_fpath,
+                    ref_nifti = ref_nifti,
+                    pat_dir   = pat_dir,
+                    acc       = acc,
+                    is_mirror = True,
+                )
+
     return df
 
 
@@ -801,8 +825,6 @@ def main(
     force_new_csv: bool      = False,
     do_ssim_map: bool        = False,
     do_plot_metrics: bool    = True,
-    decimals: int            = 3,
-    **kwargs,
 ) -> None:
     """
     Here we calculate the image quality metrics (IQMs) for the DLRecon images. The accelerated image are compared to the
@@ -824,7 +846,7 @@ def main(
     df = create_empty_iqms_dataframe(iqms)
 
     if not csv_out_fpath.exists() or force_new_csv:
-        df = calculate_iqms_on_all_patients(df, patients_dir, include_list, accelerations, iqms, do_ssim_map, decimals, logger)
+        df = calculate_iqms_on_all_patients(df, patients_dir, include_list, accelerations, do_ssim_map, logger)
         df.to_csv(csv_out_fpath, index=False)
         logger.info(f"Saved DataFrame to {csv_out_fpath}")
     else:
@@ -849,6 +871,7 @@ def main(
     # Group the data by 'roi' and 'acceleration' and calculate the mean and standard deviation of SSIM
     grouped_df = df.groupby(['roi', 'acceleration'])['ssim'].agg(['mean', 'std']).reset_index()
 
+    # Display the table
     logger.info(f"These are the mean and standard deviation of SSIM for each ROI and acceleration factor:\n")
     logger.info(grouped_df)
 
@@ -856,7 +879,7 @@ def main(
 def get_configurations() -> dict:
     DEBUG = True
     return {
-        # "project_dir":           Path('/scratch/hb-pca-rad/projects/03_nki_reader_study'),
+        "project_dir":           Path('/scratch/hb-pca-rad/projects/03_nki_reader_study'),
         "patients_dir":          Path('/scratch/hb-pca-rad/projects/03_reader_set_v2/'),
         "log_dir":               Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/logs'),
         "temp_dir":              Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/temp'),
@@ -865,8 +888,7 @@ def get_configurations() -> dict:
         'accelerations':         [1, 3, 6] if not DEBUG else [3],   # Accelerations included for post-processing.                            #[1, 3, 6],
         'iqms':                  ['ssim', 'psnr'],                  # Image quality metrics to calculate.                                    #['ssim', 'psnr', 'nmse', ],
         'decimals':              3,                                 # Number of decimals to round the IQMs to.
-        'include_list':          ['0002', '0003'],                  # List of patients to include.                                           #['0002', '0003'],
-        # 'include_list':          None,                              # List of patients to include.                                           #['0002', '0003'],
+        'include_list':          None,                              # List of patients to include.                                           #['0002', '0003'],
         'debug':                 DEBUG,                             # Whether to run in debug mode.
         'force_new_csv':         DEBUG,                             # Whether to overwrite the existing CSV file.
         'do_plot_metrics':       True,                              # Whether to plot the metrics.
@@ -878,8 +900,7 @@ def get_configurations() -> dict:
 if __name__ == "__main__":
     cfg = get_configurations()
     if cfg['debug']:
-        logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='calc_iqms_debug')
+        logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='calc_iqms_debug', log_to_console=True)
     else:
         logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='calc_iqms')
-    
-    main(logger=logger, **cfg)
+    main(**cfg, logger=logger)

@@ -364,12 +364,12 @@ def get_configurations() -> dict:
         "target_dir":         Path('/scratch/hb-pca-rad/projects/03_reader_set_v2'),
         "dataset_dir":        Path('/scratch/p290820/datasets/003_umcg_pst_ksps/data/'),
         "log_dir":            Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/logs'),
-        "do_copy_inferences_to_target_dir": False,
+        "do_copy_inferences_to_target_dir": True,
         "do_copy_dicoms_to_target_dir":     True,
         "do_copy_lesion_segs":              True,
     }
     
 if __name__ == "__main__":
     cfg = get_configurations()
-    logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='copy_dicoms_v2')
+    logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='copy_dicoms_and_lesions')
     copy_reader_set_to_target_dir(logger=logger, **cfg)

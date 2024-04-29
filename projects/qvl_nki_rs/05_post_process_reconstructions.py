@@ -789,7 +789,8 @@ def postprocess_all_patients(
     """
     for idx, pat_dir in enumerate(pat_dirs):
         pat_id = pat_dir.parts[-1]
-        logger.info(f"\nLoading patient {idx+1}/{len(pat_dirs)}:\nPatient ID: {pat_id}")
+        logger.info()
+        logger.info(f"Loading patient {idx+1}/{len(pat_dirs)}:\nPatient ID: {pat_id}")
         hf_paths = glob.glob(str(pat_dir) + '/*.h5') # find the DL recon h5 file (vSHARP 4X recon in this case 20240207)
         
         if do_make_dicom_like:
@@ -797,7 +798,9 @@ def postprocess_all_patients(
 
         # loop over the h5 files in the patient directory we should correspond to an acquisition date with recon
         for f_idx, hf_path in enumerate(hf_paths):
-            logger.info(f"\nLoading h5s patient {idx+1}/{len(pat_dirs)}:\nFile: {f_idx+1}/{len(hf_paths)}, {hf_path}")
+            logger.info("")
+            logger.info(f"Loading h5s patient {idx+1}/{len(pat_dirs)}:")
+            logger.info(f"\nFile: {f_idx+1}/{len(hf_paths)}, {hf_path}")
             
             hf = h5py.File(hf_path, 'r+')
             logger.info(f"\tHeaders of the h5 file: {list(hf.keys())}")
@@ -842,14 +845,14 @@ def postprocess_all_patients(
                 apply_transform_and_save_image(
                     transform_fpath = source_dir / 'data' / pat_id / 'transforms' / 'transform_recon_to_dicom.txt',
                     image_fname     = f"{modelname}_R{acc_fac}_recon_dcml.nii.gz",
-                    output_fname    = f"{modelname}_R{acc_fac}_recon_dcml_trans.nii.gz",
+                    output_fname    = f"{modelname}_R{acc_fac}_recon_dcml.nii.gz",
                     pat_dir         = pat_dir,
                     logger          = logger,
                 )
                 apply_transform_and_save_image(
                     transform_fpath = source_dir / 'data' / pat_id / 'transforms' / 'transform_recon_to_dicom.txt',
                     image_fname     = "rss_target_dcml.nii.gz",
-                    output_fname    = "rss_target_dcml_trans.nii.gz",
+                    output_fname    = "rss_target_dcml.nii.gz",
                     pat_dir         = pat_dir,
                     logger          = logger,
                 )
