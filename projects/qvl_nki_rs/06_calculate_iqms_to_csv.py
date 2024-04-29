@@ -314,7 +314,7 @@ def calculate_image_quality_metrics(
 
     if logger is not None:
         log_msg = "\t\t" + ", ".join([f"{iqm.upper()}: {metrics[iqm]:.{decimals}f}" for iqm in iqms if iqm in metrics])
-        logger.info(f"{log_msg}\n")
+        logger.info(f"{log_msg}")
 
     data = {
         'pat_id':       pat_dir.name,
@@ -776,7 +776,7 @@ def plot_all_quality_metrics(
         logger.info(f"Saved figure to {save_path}") if logger else None
 
 
-def create_empty_iqms_dataframe(iqms: List[str]) -> pd.DataFrame:
+def init_empty_dataframe(iqms: List[str], logger: logging.Logger = None) -> pd.DataFrame:
     """
     Create an empty DataFrame with the specified columns and data types.
     """
@@ -787,6 +787,10 @@ def create_empty_iqms_dataframe(iqms: List[str]) -> pd.DataFrame:
 
     # Create DataFrame with specified columns and data types
     df = pd.DataFrame(columns=cols).astype(types)
+    
+    if logger:
+        logger.info(f"Initialized an empty DataFrame with columns: {cols}")
+    
     return df
 
 
@@ -821,7 +825,7 @@ def main(
     - do_ssim_map (bool): Whether to calculate and save the SSIM map.
     - do_plot_metrics (bool): Whether to plot the metrics.
     """
-    df = create_empty_iqms_dataframe(iqms)
+    df = init_empty_dataframe(iqms)
 
     if not csv_out_fpath.exists() or force_new_csv:
         df = calculate_iqms_on_all_patients(df, patients_dir, include_list, accelerations, iqms, do_ssim_map, decimals, logger)
@@ -845,41 +849,51 @@ def main(
             save_path  = fig_dir / "all_iqms_vs_accs.png",
             palette    = 'bright',
         )
+        
+    if False:
+        # Group the data by 'roi' and 'acceleration' and calculate the mean and standard deviation of SSIM
+        grouped_df = df.groupby(['roi', 'acceleration'])['ssim'].agg(['mean', 'std']).reset_index()
 
-    # Group the data by 'roi' and 'acceleration' and calculate the mean and standard deviation of SSIM
-    grouped_df = df.groupby(['roi', 'acceleration'])['ssim'].agg(['mean', 'std']).reset_index()
-
-    logger.info(f"These are the mean and standard deviation of SSIM for each ROI and acceleration factor:\n")
-    logger.info(grouped_df)
+        logger.info(f"These are the mean and standard deviation of SSIM for each ROI and acceleration factor:\n")
+        logger.info(grouped_df)
 
     
 def get_configurations() -> dict:
-    DEBUG = True
     return {
-        # "project_dir":           Path('/scratch/hb-pca-rad/projects/03_nki_reader_study'),
-        "patients_dir":          Path('/scratch/hb-pca-rad/projects/03_reader_set_v2/'),
-        "log_dir":               Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/logs'),
-        "temp_dir":              Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/temp'),
-        "fig_dir":               Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/figures'),
-        "csv_out_fpath":         Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/iqms_vsharp_r1r3r6_v1.csv'),
-        'accelerations':         [1, 3, 6] if not DEBUG else [3],   # Accelerations included for post-processing.                            #[1, 3, 6],
-        'iqms':                  ['ssim', 'psnr'],                  # Image quality metrics to calculate.                                    #['ssim', 'psnr', 'nmse', ],
-        'decimals':              3,                                 # Number of decimals to round the IQMs to.
-        'include_list':          ['0002', '0003'],                  # List of patients to include.                                           #['0002', '0003'],
-        # 'include_list':          None,                              # List of patients to include.                                           #['0002', '0003'],
-        'debug':                 DEBUG,                             # Whether to run in debug mode.
-        'force_new_csv':         DEBUG,                             # Whether to overwrite the existing CSV file.
-        'do_plot_metrics':       True,                              # Whether to plot the metrics.
-        'do_consider_rois':      False,                             # Whether to consider the different ROIs for the IQM calculation.
-        'do_ssim_map':           False,                             # Whether to calculate and save the SSIM map.
+        "patients_dir":       Path('/scratch/hb-pca-rad/projects/03_reader_set_v2/'),
+        "log_dir":            Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/logs'),
+        "temp_dir":           Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/temp'),
+        "fig_dir":            Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/figures'),
+        "csv_out_fpath":      Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/iqms_vsharp_r1r3r6_v1.csv'),
+        'include_list_fpath': Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/lists/inclusion/include_ids.lst'),                   #List of patient_ids to include.
+        'accelerations':      [3, 6],                         # Accelerations included for post-processing.                            #[1, 3, 6],
+        'iqms':               ['ssim', 'psnr', 'nmse'],                  # Image quality metrics to calculate.                                    #['ssim', 'psnr', 'nmse', ],
+        'decimals':           3,                                 # Number of decimals to round the IQMs to.
+        'force_new_csv':      True,                              # Whether to overwrite the existing CSV file.
+        'do_plot_metrics':    True,                              # Whether to plot the metrics.
+        'do_consider_rois':   False,                             # Whether to consider the different ROIs for the IQM calculation.
+        'do_ssim_map':        False,                             # Whether to calculate and save the SSIM map.
+        'debug':              False,                              # Whether to run in debug mode.
     }
 
 
 if __name__ == "__main__":
     cfg = get_configurations()
+    
+    log_fname = 'calc_iqms_debug' if cfg['debug'] else 'calc_iqms'
+    logger = setup_logger(cfg['log_dir'], use_time=False, part_fname=log_fname)
+    
+    # Load the inclusion list if specified in the configuration
+    if cfg.get('include_list_fpath'):
+        try:
+            with open(cfg['include_list_fpath'], 'r') as f:
+                cfg['include_list'] = f.read().splitlines()
+        except FileNotFoundError:
+            logger.error(f"Inclusion list file not found: {cfg['include_list_fpath']}")
+            exit(1)
+    
+    # Override include_list if in debug mode
     if cfg['debug']:
-        logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='calc_iqms_debug')
-    else:
-        logger = setup_logger(cfg['log_dir'], use_time=False, part_fname='calc_iqms')
+        cfg['include_list'] = ['0053_ANON5517301', '0032_ANON7649583', '0120_ANON7275574']
     
     main(logger=logger, **cfg)
