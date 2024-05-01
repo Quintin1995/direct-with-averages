@@ -6,14 +6,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
 
+from metrics import fastmri_ssim_qvl, fastmri_psnr_qvl, fastmri_nmse_qvl, blurriness_metric, hfen
 from datetime import datetime
 from multiprocessing import Pool
 from functools import partial
 from pathlib import Path
-from skimage.metrics import structural_similarity
-from skimage.metrics import peak_signal_noise_ratio as psnr
-from scipy.ndimage import gaussian_laplace
 from typing import Tuple, List
+from skimage.metrics import structural_similarity
 
 
 def setup_logger(log_dir: Path, use_time: bool = True, part_fname: str = None) -> logging.Logger:
@@ -104,71 +103,6 @@ def resample_to_reference(
             interpolator, default_pixel_value, 
             ref_img.GetPixelID())
     return resampled_img
-
-
-def fastmri_ssim_qvl(gt: np.ndarray, pred: np.ndarray) -> float:
-    """Compute SSIM compatible with the FastMRI challenge."""
-    assert gt.shape == pred.shape, "Shape mismatch between gt and pred."
-    assert gt.dtype == pred.dtype, "Data type mismatch between gt and pred."
-
-    if gt.ndim == 2:
-        gt = np.expand_dims(gt, axis=0)
-        pred = np.expand_dims(pred, axis=0)
-
-    assert len(gt.shape) == 3, "Expecting 3D arrays."
-    
-    return structural_similarity(
-        gt,
-        pred,
-        channel_axis=0,
-        data_range=gt.max()
-    )
-
-
-def fastmri_psnr_qvl(gt: np.ndarray, pred: np.ndarray) -> float:
-    """Compute PSNR compatible with the FastMRI challenge."""
-    assert gt.shape == pred.shape, "Shape mismatch between gt and pred."
-    assert gt.dtype == pred.dtype, "Data type mismatch between gt and pred."
-
-    if gt.ndim == 2:
-        gt   = np.expand_dims(gt, axis=0)
-        pred = np.expand_dims(pred, axis=0)
-
-    assert len(gt.shape) == 3, "Expecting 3D arrays."
-
-    return psnr(
-        image_true=gt,
-        image_test=pred,
-        data_range=gt.max()
-    )
-
-
-def fastmri_nmse_qvl(gt: np.ndarray, pred: np.ndarray) -> float:
-    """Compute NMSE compatible with the FastMRI challenge."""
-    assert gt.shape == pred.shape, "Shape mismatch between gt and pred."
-    assert gt.dtype == pred.dtype, "Data type mismatch between gt and pred."
-
-    if gt.ndim == 2:
-        gt = np.expand_dims(gt, axis=0)
-        pred = np.expand_dims(pred, axis=0)
-
-    assert len(gt.shape) == 3, "Expecting 3D arrays."
-
-    return np.linalg.norm(gt - pred)**2 / np.linalg.norm(gt)**2
-
-
-def blurriness_metric(image: np.ndarray) -> float:
-    """Compute a blurriness metric based on the Laplacian.
-    We call this the variance of the Laplacian (VoFL).
-    """
-
-    # assert len(image.shape) == 3, "Expecting 3D arrays."
-    
-    # Compute the Laplacian of the image
-    laplacian = gaussian_laplace(image, sigma=1)
-    
-    # The variance of the Laplacian is used as the metric
-    return np.var(laplacian)
 
 
 def calculate_bounding_box(roi: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -311,6 +245,12 @@ def calculate_image_quality_metrics(
             metrics['nmse'] = round(fastmri_nmse_qvl(gt=target, pred=recon), decimals)
         elif iqm == 'vofl':
             metrics['vofl'] = round(blurriness_metric(image=recon), decimals)
+        elif iqm == 'rmse':
+            metrics['rmse'] = round(np.sqrt(np.mean((recon - target) ** 2)), decimals)
+        elif iqm == 'hfen':
+            metrics['hfen'] = round(hfen(pred=recon, gt=target), decimals)
+        else:
+            raise ValueError(f"Invalid IQM: {iqm}")
 
     if logger is not None:
         log_msg = "\t\t" + ", ".join([f"{iqm.upper()}: {metrics[iqm]:.{decimals}f}" for iqm in iqms if iqm in metrics])
@@ -631,6 +571,7 @@ def calculate_iqms_on_all_patients(
     patients_dir: Path,
     include_list: list,
     accelerations: list,
+    fovs: List[str],
     iqms: List[str],
     do_ssim_map: bool = False,
     decimals: int = 3,
@@ -647,6 +588,9 @@ def calculate_iqms_on_all_patients(
     - accelerations (list): The list of accelerations to process
     - logger (logging.Logger): The logger instance
     - do_ssim_map (bool): Whether to calculate and save the SSIM map
+    - decimals (int): The number of decimals to round the IQMs to
+    - fov1 (str): The first field of view to process
+    
     Returns:
     - df (pd.DataFrame): The updated DataFrame with the IQMs
     """
@@ -660,9 +604,11 @@ def calculate_iqms_on_all_patients(
         target = load_nifti_as_array(target_fpath)
         for acc in accelerations:
             logger.info(f"\tProcessing acceleration: {acc}")
-            recon_fpath = [x for x in pat_dir.iterdir() if f"vsharp_r{acc}_recon_dcml" in x.name.lower()][0]
-            recon  = load_nifti_as_array(recon_fpath)
-            df = calculate_iqm_and_add_to_df(df, recon, target, pat_dir, acc, iqms, "prfov", decimals, logger)
+            
+            for fov in fovs:
+                recon_fpath = [x for x in pat_dir.iterdir() if f"vsharp_r{acc}_recon_dcml" in x.name.lower()][0]
+                recon  = load_nifti_as_array(recon_fpath)
+                df = calculate_iqm_and_add_to_df(df, recon, target, pat_dir, acc, iqms, fov, decimals, logger)
             
             # Calculate an SSIM map of the reconstruction versus the target
             if do_ssim_map:
@@ -682,7 +628,12 @@ def calculate_iqms_on_all_patients(
     return df
 
 
-def plot_quality_metric(df, metric='ssim', save_path=None, palette='bright'):
+def plot_iqm_vs_accs_scatter_trend(
+    df: pd.DataFrame,
+    metric    = 'ssim',
+    save_path = None,
+    palette   = 'bright'
+):
     # Dictionary for renaming ROIs
     rename_dict = {'abfov': 'Abdominal FOV', 'prfov': 'Prostate FOV', 'lsfov': 'Lesion FOV', 'lsfov_mirrored': 'Control Lesion FOV'}
 
@@ -723,8 +674,51 @@ def plot_quality_metric(df, metric='ssim', save_path=None, palette='bright'):
         logger.info(f"Saved figure to {save_path}")
 
 
-# Modified function to plot all four quality metrics in the same figure
-def plot_all_quality_metrics(
+def plot_all_iqms_vs_accs_violin(
+    df: pd.DataFrame,
+    metrics=['ssim', 'psnr', 'nmse', 'vofl'],
+    save_path=None,
+    palette='muted',  # Using a predefined palette that is visually appealing
+    logger: logging.Logger = None,
+) -> None:
+    if 'roi' in df.columns:
+        rename_dict = {'abfov': 'Abdominal FOV', 'prfov': 'Prostate FOV', 'lsfov': 'Lesion FOV', 'lsfov_mirrored': 'Control Lesion FOV'}
+        df['roi_grouped'] = df['roi'].apply(lambda x: rename_dict.get(x, x))
+        hue = 'roi_grouped'
+    else:
+        hue = None
+
+    # df['acceleration'] = df['acceleration'].astype(int)  # Ensure 'acceleration' is integer
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    axes = axes.flatten()
+
+    for idx, metric in enumerate(metrics):
+        ax = axes[idx]
+        sns.violinplot(data=df, x='acceleration', y=metric, hue=hue, ax=ax, palette=palette, inner='quartile')
+        if hue:
+            sns.stripplot(data=df, x='acceleration', y=metric, hue=hue, ax=ax, dodge=True, jitter=0.1, palette=palette, color='k', alpha=0.5, size=4)
+            ax.legend().remove()
+        else:
+            sns.stripplot(data=df, x='acceleration', y=metric, ax=ax, color='k', jitter=0.1, size=4)
+
+        ax.set_title(f"{metric.upper()}")
+        ax.set_xlabel("R value")
+        ax.set_ylabel(metric.upper())
+        ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)  # Dotted line, lighter width, lower alpha for subtlety
+
+
+    if hue and idx == len(metrics) - 1:  # add legend only on the last subplot for clarity
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles[:len(df[hue].unique())], labels[:len(df[hue].unique())], title='ROI Types', loc='upper right')
+
+    if save_path:
+        plt.savefig(Path(save_path), dpi=300, bbox_inches='tight')
+        if logger:
+            logger.info(f"Saved figure to {save_path}")
+            
+
+def plot_all_iqms_vs_accs_scatter_trend(
     df: pd.DataFrame,
     metrics=['ssim', 'psnr', 'nmse', 'vofl'],
     save_path=None,
@@ -794,18 +788,66 @@ def init_empty_dataframe(iqms: List[str], logger: logging.Logger = None) -> pd.D
     return df
 
 
+def calc_or_load_iqms_df(csv_out_fpath: Path,
+    force_new_csv: bool,
+    patients_dir: Path,
+    include_list: List[str],
+    accelerations: List[int],
+    fovs: List[str],
+    iqms: List[str],
+    do_ssim_map: bool,
+    decimals: int,
+    logger: logging.Logger,
+    **cfg,
+) -> pd.DataFrame:
+    
+    if not csv_out_fpath.exists() or force_new_csv:
+        df = init_empty_dataframe(iqms, logger)
+        df = calculate_iqms_on_all_patients(
+            df              = df,
+            patients_dir    = patients_dir,
+            include_list    = include_list,
+            accelerations   = accelerations,
+            fovs            = fovs,
+            iqms            = iqms,
+            do_ssim_map     = do_ssim_map,
+            decimals        = decimals,
+            logger          = logger,
+            )
+        df.to_csv(csv_out_fpath, index=False, sep=';')
+        logger.info(f"Saved DataFrame to {csv_out_fpath}")
+    else:
+        df = pd.read_csv(csv_out_fpath)
+        logger.info(f"Loaded DataFrame from {csv_out_fpath}")
+    return df
+
+
+def make_plots(df: pd.DataFrame, fig_dir: Path, iqms: List[str], debug: bool) -> None:
+    str_id = "debug" if debug else ""
+    # for iqm in iqms:
+    #     plot_iqm_vs_accs_scatter_trend(
+    #         df         = df,
+    #         metric     = iqm,
+    #         save_path  = fig_dir / f"{iqm}_vs_accs{str_id}.png",
+    #     )
+    # plot_all_iqms_vs_accs_scatter_trend(
+    #     df         = df,
+    #     metrics    = iqms,
+    #     save_path  = fig_dir / f"all_iqms_vs_accs{str_id}.png",
+    #     palette    = 'bright',
+    # )
+    plot_all_iqms_vs_accs_violin(
+        df         = df,
+        metrics    = iqms,
+        save_path  = fig_dir / f"all_iqms_vs_accs_violin{str_id}.png",
+    )
+
+
 def main(
-    patients_dir: Path       = None,
-    accelerations: List[int] = [1, 3, 6],
     iqms: List[str]          = ['ssim', 'psnr'],
-    csv_out_fpath: Path      = None,
     fig_dir: Path            = None,
-    include_list: List[str]  = None,
     logger: logging.Logger   = None,
-    force_new_csv: bool      = False,
-    do_ssim_map: bool        = False,
-    do_plot_metrics: bool    = True,
-    decimals: int            = 3,
+    debug: bool              = False,
     **kwargs,
 ) -> None:
     """
@@ -823,32 +865,10 @@ def main(
     - logger (logging.Logger): The logger instance.
     - force_new_csv (bool): Whether to overwrite the existing CSV file.
     - do_ssim_map (bool): Whether to calculate and save the SSIM map.
-    - do_plot_metrics (bool): Whether to plot the metrics.
     """
-    df = init_empty_dataframe(iqms)
-
-    if not csv_out_fpath.exists() or force_new_csv:
-        df = calculate_iqms_on_all_patients(df, patients_dir, include_list, accelerations, iqms, do_ssim_map, decimals, logger)
-        df.to_csv(csv_out_fpath, index=False)
-        logger.info(f"Saved DataFrame to {csv_out_fpath}")
-    else:
-        df = pd.read_csv(csv_out_fpath)
-        logger.info(f"Loaded DataFrame from {csv_out_fpath}")
-
-    if do_plot_metrics:
-        for iqm in iqms:
-            plot_quality_metric(
-                df         = df,
-                metric     = iqm,
-                save_path  = fig_dir / f"{iqm}_vs_accs.png",
-            )
-
-        plot_all_quality_metrics(
-            df         = df,
-            metrics    = iqms,
-            save_path  = fig_dir / "all_iqms_vs_accs.png",
-            palette    = 'bright',
-        )
+    
+    df = calc_or_load_iqms_df(logger = logger, **cfg)
+    make_plots(df, fig_dir, iqms, debug)
         
     if False:
         # Group the data by 'roi' and 'acceleration' and calculate the mean and standard deviation of SSIM
@@ -860,20 +880,21 @@ def main(
     
 def get_configurations() -> dict:
     return {
+        "csv_out_fpath":      Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/iqms_vsharp_r1r3r6_v2.csv'),
         "patients_dir":       Path('/scratch/hb-pca-rad/projects/03_reader_set_v2/'),
         "log_dir":            Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/logs'),
         "temp_dir":           Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/temp'),
         "fig_dir":            Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/figures'),
-        "csv_out_fpath":      Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/iqms_vsharp_r1r3r6_v1.csv'),
         'include_list_fpath': Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/lists/inclusion/include_ids.lst'),                   #List of patient_ids to include.
-        'accelerations':      [3, 6],                         # Accelerations included for post-processing.                            #[1, 3, 6],
-        'iqms':               ['ssim', 'psnr', 'nmse'],                  # Image quality metrics to calculate.                                    #['ssim', 'psnr', 'nmse', ],
+        'accelerations':      [3, 6],                            # Accelerations included for post-processing.                            #[1, 3, 6],
+        'iqms':               ['ssim', 'psnr', 'rmse', 'hfen'],  # Image quality metrics to calculate.                                    #['ssim', 'psnr', 'nmse', ],
         'decimals':           3,                                 # Number of decimals to round the IQMs to.
-        'force_new_csv':      True,                              # Whether to overwrite the existing CSV file.
-        'do_plot_metrics':    True,                              # Whether to plot the metrics.
+        # 'do_plot_metrics':    True,                              # Whether to plot the metrics.
         'do_consider_rois':   False,                             # Whether to consider the different ROIs for the IQM calculation.
         'do_ssim_map':        False,                             # Whether to calculate and save the SSIM map.
+        'fovs':               [None],                              # The field of views to process. Options are: ['abfov', 'prfov', 'lsfov']
         'debug':              False,                              # Whether to run in debug mode.
+        'force_new_csv':      True,                              # Whether to overwrite the existing CSV file.
     }
 
 

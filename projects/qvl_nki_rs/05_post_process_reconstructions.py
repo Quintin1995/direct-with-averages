@@ -272,66 +272,6 @@ def process_recon(
     return recon
 
 
-# def process_target(fpath_h5: Path, verbose: bool = False, do_safe_as_nifti=False) -> np.ndarray:
-#     """Process the target from an h5 file."""
-    
-#     hf = h5py.File(fpath_h5, 'r')
-#     target = hf['target'][()]
-#     modelname = hf.attrs["modelname"]
-#     hf.close()
-
-#     if verbose:
-#         print(f"\tShape of the target: {target.shape}, with dtype {target.dtype}")
-
-#     if do_safe_as_nifti:
-#         outfname = Path(fpath_h5)
-#         parent_dir = outfname.parent
-#         # recons_dir = parent_dir / 'recons'
-#         # recons_dir.mkdir(exist_ok=True)  # Create 'recons' directory if it doesn't exist
-#         outfname = parent_dir / f"{modelname}_target.nii.gz"
-#         safe_as_sitk(
-#             img            = target,
-#             filename       = outfname,
-#             reference_sitk = None,
-#             do_hist_norm   = False,
-#             verbose        = True,
-#             do_round       = True
-#         )
-
-#     return target
-
-
-# def process_reconstruction_pad(
-#         fpath_h5: Path,
-#         do_safe_as_nifti = False,
-#         verbose: bool    = False,
-#     ) -> np.ndarray:
-#     """
-#     Process the reconstruction_pad from an h5 file.
-#     The zero-padding was applied in the RIM on the real multi-coil kspace.
-#     Args:
-#         fpath_h5 (Path): [description]
-#         verbose (bool, optional): [description]. Defaults to False.
-#         do_safe_as_nifti (bool, optional): [description]. Defaults to False.
-#     Returns:
-#         np.ndarray: [description]
-#     """
-    
-#     hf = h5py.File(fpath_h5, 'r')
-#     recon_pad = hf['reconstruction_pad'][()]
-#     hf.close()
-
-#     if verbose:
-#         print(f"\tShape of the reconstruction_pad: {recon_pad.shape}, with dtype {recon_pad.dtype}")
-
-#     if do_safe_as_nifti:
-#         outfname = Path(fpath_h5)
-#         outfname = outfname.with_name(outfname.stem + "_recon_pad_real_ksp.nii.gz")
-#         safe_as_sitk(recon_pad, outfname, verbose=True)
-
-#     return recon_pad
-
-
 def add_vis_qual_metrics_to_h5(hf: h5py, recon: np.ndarray, target: np.ndarray, logger: Optional[logging.Logger] = None):
     """Add SSIM, PSNR, and NMSE to the h5 file."""
 
@@ -668,10 +608,6 @@ def get_patient_dirs(prediction_dir: Path, inclusion_list = None) -> List[Path]:
 
     # Filter: filter out each patient directory that does not adhere to the format: 0003_ANON5046358
     pat_dirs = [d for d in pat_dirs if len(d.name.split('_')) == 2]
-    
-    # Filter: filter out each patient that is in the exclusion_pat_list
-    # if exclusion_pat_list is not None:
-    #     pat_dirs = [d for d in pat_dirs if not any(pat in d.name for pat in exclusion_pat_list)]
     
     # Inclusion list is only the first part of the patient directory name named the sequential ID.
     if inclusion_list is not None:
