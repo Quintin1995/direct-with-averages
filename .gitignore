@@ -110,4 +110,11 @@ ENV/
 # IDE settings
 .vscode/
 
+
+# Project: Reader Study
 projects/qvl_nki_rs/configs
+projects/qvl_nki_rs/cipher.py
+
+# Project: Personalized Reconstruction
+projects/qvl_personalized_recon/configs
+
