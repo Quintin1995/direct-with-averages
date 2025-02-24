@@ -12,6 +12,7 @@ from multiprocessing import Pool
 from functools import partial
 from pathlib import Path
 from typing import Tuple, List
+from scipy import stats
 from skimage.metrics import structural_similarity
 
 
@@ -674,7 +675,7 @@ def plot_iqm_vs_accs_scatter_trend(
         logger.info(f"Saved figure to {save_path}")
 
 
-def plot_all_iqms_vs_accs_violin(
+def plot_all_iqms_vs_accs_violin1(
     df: pd.DataFrame,
     metrics=['ssim', 'psnr', 'nmse', 'vofl'],
     save_path=None,
@@ -790,39 +791,77 @@ def init_empty_dataframe(iqms: List[str], logger: logging.Logger = None) -> pd.D
 
 def calc_or_load_iqms_df(csv_out_fpath: Path,
     force_new_csv: bool,
-    patients_dir: Path,
-    include_list: List[str],
-    accelerations: List[int],
-    fovs: List[str],
     iqms: List[str],
-    do_ssim_map: bool,
-    decimals: int,
     logger: logging.Logger,
     **cfg,
+    # patients_dir: Path,
+    # include_list: List[str],
+    # accelerations: List[int],
+    # fovs: List[str],
+    # do_ssim_map: bool,
+    # decimals: int,
 ) -> pd.DataFrame:
-    
     if not csv_out_fpath.exists() or force_new_csv:
         df = init_empty_dataframe(iqms, logger)
         df = calculate_iqms_on_all_patients(
             df              = df,
-            patients_dir    = patients_dir,
-            include_list    = include_list,
-            accelerations   = accelerations,
-            fovs            = fovs,
-            iqms            = iqms,
-            do_ssim_map     = do_ssim_map,
-            decimals        = decimals,
             logger          = logger,
-            )
+            **cfg)
         df.to_csv(csv_out_fpath, index=False, sep=';')
         logger.info(f"Saved DataFrame to {csv_out_fpath}")
     else:
-        df = pd.read_csv(csv_out_fpath)
+        df = pd.read_csv(csv_out_fpath, sep=';')
         logger.info(f"Loaded DataFrame from {csv_out_fpath}")
     return df
 
 
-def make_plots(df: pd.DataFrame, fig_dir: Path, iqms: List[str], debug: bool) -> None:
+def plot_all_iqms_vs_accs_violin(
+    df: pd.DataFrame,
+    metrics=['ssim', 'psnr', 'nmse', 'vofl'],
+    save_path=None,
+    palette='muted',  # Using a predefined palette that is visually appealing
+    logger: logging.Logger = None,
+) -> None:
+    if 'roi' in df.columns:
+        rename_dict = {'abfov': 'Abdominal FOV', 'prfov': 'Prostate FOV', 'lsfov': 'Lesion FOV', 'lsfov_mirrored': 'Control Lesion FOV'}
+        df['roi_grouped'] = df['roi'].apply(lambda x: rename_dict.get(x, x))
+        hue = 'roi_grouped'
+    else:
+        hue = None
+
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4))  # Changed to 1 row, 4 columns
+    axes = axes.flatten()
+
+    for idx, metric in enumerate(metrics):
+        ax = axes[idx]
+        sns.violinplot(data=df, x='acceleration', y=metric, hue=hue, ax=ax, palette=palette, inner='quartile')
+        if hue:
+            sns.stripplot(data=df, x='acceleration', y=metric, hue=hue, ax=ax, dodge=True, jitter=0.1, palette=palette, color='k', alpha=0.5, size=4)
+            ax.legend().remove()
+        else:
+            sns.stripplot(data=df, x='acceleration', y=metric, ax=ax, color='k', jitter=0.1, size=4)
+
+        ax.set_title(f"{metric.upper()}")  # Y-labels are removed, titles are used instead
+        ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)  # Maintain grid settings
+        axes[idx].set_ylabel('')
+        axes[idx].set_xlabel('')
+
+    # Set a global X-label
+    fig.text(0.5, 0.04, 'R value', ha='center', va='center', fontsize=12)
+
+    plt.tight_layout(pad=1.0)  # Adjust spacing to be relatively tight
+
+    if hue and idx == len(metrics) - 1:  # Add legend only on the last subplot for clarity
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles[:len(df[hue].unique())], labels[:len(df[hue].unique())], title='ROI Types', loc='upper right')
+
+    if save_path:
+        plt.savefig(Path(save_path), dpi=300, bbox_inches='tight')
+        if logger:
+            logger.info(f"Saved figure to {save_path}")
+
+
+def make_iqms_plots(df: pd.DataFrame, fig_dir: Path, iqms: List[str], debug: bool, logger: logging.Logger = None) -> None:
     str_id = "debug" if debug else ""
     # for iqm in iqms:
     #     plot_iqm_vs_accs_scatter_trend(
@@ -839,16 +878,107 @@ def make_plots(df: pd.DataFrame, fig_dir: Path, iqms: List[str], debug: bool) ->
     plot_all_iqms_vs_accs_violin(
         df         = df,
         metrics    = iqms,
-        save_path  = fig_dir / f"all_iqms_vs_accs_violin{str_id}.png",
+        save_path  = fig_dir / f"all_iqms_vs_accs_violin{str_id}_v2.png",
+        logger     = logger,
     )
+    
+
+def make_table_mean_std(df: pd.DataFrame, logger: logging.Logger, iqms: List[str]) -> pd.DataFrame:
+    """
+    Computes the mean and standard deviation for each metric per acceleration value in the DataFrame.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the metrics and acceleration values.
+    logger (logging.Logger): The Logger object for logging messages.
+
+    Returns:
+    pd.DataFrame: A new DataFrame with the mean and standard deviation of each metric per acceleration value.
+    """
+    # Group the data by 'acceleration' and calculate the mean and std for each metric
+    stats_df = df.drop(columns=[col for col in df.columns if col not in ['acceleration'] + iqms]).groupby('acceleration').agg(['mean', 'std'])
+
+    # Simplify the multi-level column names
+    stats_df.columns = ['_'.join(col).strip() for col in stats_df.columns.values]
+
+    # Log the creation of the table
+    if logger:
+        logger.info("Table of statistics has been created.")
+        print(stats_df.head(100))
+
+    return stats_df
+
+
+def bootstrap_ci(group: np.array, num_boots: int, ci: int) -> Tuple[float, float]:
+    """
+    Compute the confidence interval using bootstrapping.
+    
+    Parameters:
+    - group (np.array): The array of values to bootstrap.
+    - num_boots (int): The number of bootstrap samples to generate.
+    - ci (int): The confidence interval percentage.
+
+    Returns:
+    - lower_bound (float): The lower bound of the confidence interval.
+    - upper_bound (float): The upper bound of the confidence interval.
+    """
+    boot_means = []
+    for _ in range(num_boots):
+        boot_sample = np.random.choice(group, size=len(group), replace=True)
+        boot_means.append(np.mean(boot_sample))
+    lower_bound = np.percentile(boot_means, (100-ci)/2)
+    upper_bound = np.percentile(boot_means, 100-(100-ci)/2)
+    return lower_bound, upper_bound
+
+
+def make_table_median_ci(df: pd.DataFrame, iqms: List[str], csv_stats_out_fpath: Path, logger: logging.Logger=None, decimals: int=2) -> pd.DataFrame:
+    """
+    Computes the median, standard deviation, and 95% confidence intervals for each metric per acceleration value in the DataFrame.
+    
+    Parameters:
+    - df (pd.DataFrame): The DataFrame containing the metrics and acceleration values.
+    - iqms (List[str]): List of image quality metrics to analyze.
+    - csv_stats_out_fpath (Path): The file path to output the statistics DataFrame.
+    - logger (logging.Logger, optional): The Logger object for logging messages. Defaults to None.
+    - decimals (int): Number of decimal places for rounding the results. Defaults to 2.
+
+    Returns:
+    - pd.DataFrame: A new DataFrame with the median, standard deviation, and 95% confidence intervals of each metric per acceleration value.
+    """
+    z = 1.96  # Correct Z-score for a 95% CI
+    stats_df = pd.DataFrame()
+
+    for metric in iqms:
+        acc_grouped = df.groupby('acceleration')[metric]
+        # stats_df[metric + '_median'] = acc_grouped.median().round(decimals)
+        # stats_df[metric + '_std']    = acc_grouped.std().round(decimals)
+        stats_df[metric + '_mean']   = acc_grouped.mean().round(decimals)
+        
+        ci95_lo, ci95_hi = [], []
+        for name, acc_group in acc_grouped:
+            clean_group = acc_group.dropna()  # Drop NaN values for accurate CI calculation
+            mu = clean_group.mean()
+            std = clean_group.std()
+            n = len(clean_group)
+            ci_low = mu - (z * (std / np.sqrt(n)))
+            ci_high = mu + (z * (std / np.sqrt(n)))
+            logger.info(f"Stats: {metric} - {name}: mu={mu}, std={std}, n={n}, CI=({ci_low}, {ci_high})")
+            ci95_lo.append(round(ci_low, decimals))
+            ci95_hi.append(round(ci_high, decimals))
+        stats_df[metric + '_ci95_lo'] = ci95_lo
+        stats_df[metric + '_ci95_hi'] = ci95_hi
+    stats_df.to_csv(csv_stats_out_fpath, index=False, sep=';')
+    if logger:
+        logger.info(f"Saved DataFrame to {csv_stats_out_fpath}")
+    return stats_df
 
 
 def main(
-    iqms: List[str]          = ['ssim', 'psnr'],
-    fig_dir: Path            = None,
-    logger: logging.Logger   = None,
-    debug: bool              = False,
-    **kwargs,
+    iqms: List[str]           = ['ssim', 'psnr'],
+    fig_dir: Path             = None,
+    logger: logging.Logger    = None,
+    debug: bool               = False,
+    csv_stats_out_fpath: Path = None,
+    **cfg,
 ) -> None:
     """
     Here we calculate the image quality metrics (IQMs) for the DLRecon images. The accelerated image are compared to the
@@ -866,10 +996,14 @@ def main(
     - force_new_csv (bool): Whether to overwrite the existing CSV file.
     - do_ssim_map (bool): Whether to calculate and save the SSIM map.
     """
+    df = calc_or_load_iqms_df(**cfg, iqms=iqms, logger=logger)
+    if False:
+        make_iqms_plots(df=df, fig_dir=fig_dir, iqms=iqms, debug=debug, logger=logger)
+    if False: 
+        make_table_mean_std(df, logger, iqms)
+    if True:
+        make_table_median_ci(df=df, iqms=iqms, csv_stats_out_fpath=csv_stats_out_fpath, logger=logger)
     
-    df = calc_or_load_iqms_df(logger = logger, **cfg)
-    make_plots(df, fig_dir, iqms, debug)
-        
     if False:
         # Group the data by 'roi' and 'acceleration' and calculate the mean and standard deviation of SSIM
         grouped_df = df.groupby(['roi', 'acceleration'])['ssim'].agg(['mean', 'std']).reset_index()
@@ -881,6 +1015,7 @@ def main(
 def get_configurations() -> dict:
     return {
         "csv_out_fpath":      Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/iqms_vsharp_r1r3r6_v2.csv'),
+        "csv_stats_out_fpath":Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/stats/results/metrics_table_v1.csv'),
         "patients_dir":       Path('/scratch/hb-pca-rad/projects/03_reader_set_v2/'),
         "log_dir":            Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/logs'),
         "temp_dir":           Path('/scratch/hb-pca-rad/projects/03_nki_reader_study/temp'),
@@ -889,12 +1024,11 @@ def get_configurations() -> dict:
         'accelerations':      [3, 6],                            # Accelerations included for post-processing.                            #[1, 3, 6],
         'iqms':               ['ssim', 'psnr', 'rmse', 'hfen'],  # Image quality metrics to calculate.                                    #['ssim', 'psnr', 'nmse', ],
         'decimals':           3,                                 # Number of decimals to round the IQMs to.
-        # 'do_plot_metrics':    True,                              # Whether to plot the metrics.
         'do_consider_rois':   False,                             # Whether to consider the different ROIs for the IQM calculation.
         'do_ssim_map':        False,                             # Whether to calculate and save the SSIM map.
-        'fovs':               [None],                              # The field of views to process. Options are: ['abfov', 'prfov', 'lsfov']
-        'debug':              False,                              # Whether to run in debug mode.
-        'force_new_csv':      True,                              # Whether to overwrite the existing CSV file.
+        'fovs':               [None],                            # The field of views to process. Options are: ['abfov', 'prfov', 'lsfov']
+        'debug':              False,                             # Whether to run in debug mode.
+        'force_new_csv':      False,                              # Whether to overwrite the existing CSV file.
     }
 
 
