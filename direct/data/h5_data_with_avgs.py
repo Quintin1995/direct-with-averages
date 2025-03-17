@@ -28,23 +28,25 @@ class H5WithAvgsSliceData(Dataset):
     def __init__(
         self,
         root: pathlib.Path,
-        filenames_filter: Union[List[PathOrString], None] = None,
-        filenames_lists: Union[List[PathOrString], None] = None,
-        filenames_lists_root: Union[PathOrString, None] = None,
-        regex_filter: Optional[str] = None,
+        filenames_filter: Union[List[PathOrString], None]      = None,
+        filenames_lists: Union[List[PathOrString], None]       = None,
+        filenames_lists_root: Union[PathOrString, None]        = None,
+        regex_filter: Optional[str]                            = None,
         dataset_description: Optional[Dict[PathOrString, Any]] = None,
-        metadata: Optional[Dict[PathOrString, Dict]] = None,
-        sensitivity_maps: Optional[PathOrString] = None,
-        extra_keys: Optional[Tuple] = None,
-        pass_attrs: bool = False,
-        text_description: Optional[str] = None,
-        kspace_context: Optional[int] = None,
-        pass_dictionaries: Optional[Dict[str, Dict]] = None,
-        pass_h5s: Optional[Dict[str, List]] = None,
-        slice_data: Optional[slice] = None,
-        compute_mask: bool = False,
-        store_applied_acs_mask: bool = True,
-        avg_collapse_strat: str = None,
+        metadata: Optional[Dict[PathOrString, Dict]]           = None,
+        sensitivity_maps: Optional[PathOrString]               = None,
+        extra_keys: Optional[Tuple]                            = None,
+        pass_attrs: bool                                       = False,
+        text_description: Optional[str]                        = None,
+        kspace_context: Optional[int]                          = None,
+        pass_dictionaries: Optional[Dict[str, Dict]]           = None,
+        pass_h5s: Optional[Dict[str, List]]                    = None,
+        slice_data: Optional[slice]                            = None,
+        compute_mask: bool                                     = False,
+        store_applied_acs_mask: bool                           = True,
+        avg_collapse_strat: str                                = None,
+        add_gaussian_noise: bool                               = False,
+        noise_fraction: float                                  = 0.0005
     ) -> None:
         """Initialize the dataset.
 
@@ -88,12 +90,13 @@ class H5WithAvgsSliceData(Dataset):
             avg2: takes the second average only
             avg3: takes the third average only
             allavg: takes the average of avg1 and avg3 and adds avg2, since avg1 and avg3 measure odd lines and avg2 measures even lines we geta  full kspace
+            full_kspace = (avg1 + avg3) / 2 + avg2
+        add_gaussian_noise: bool
+            Add gaussian noise to the k-space data. Default: False.
         compute_mask: bool
             Compute the mask for the ACS region. Default: False.
         store_applied_acs_mask: bool
-
             >>> pass_h5s = {"sensitivity_map": "/data/sensitivity_maps"}
-
             will add to each output sample a key `sensitivity_map` with value a numpy array containing the same slice
             of /data/sensitivity_maps/filename.h5 as the one of the original filename filename.h5.
         slice_data : Optional[slice]
@@ -101,18 +104,26 @@ class H5WithAvgsSliceData(Dataset):
             is for instance convenient in the validation set of the public Calgary-Campinas dataset as the first 50
             and last 50 slices are excluded in the evaluation.
         """
-        self.logger = logging.getLogger(type(self).__name__)
-
-        self.root                   = pathlib.Path(root)
-        self.filenames_filter       = filenames_filter
-        self.metadata               = metadata
-        self.dataset_description    = dataset_description
-        self.text_description       = text_description
-        self.compute_mask           = compute_mask              # QVL - Compute the mask for the ACS region
-        self.store_applied_acs_mask = store_applied_acs_mask    # QVL - Store the applied ACS mask in the dataset
-        self.average_collapse_strat = avg_collapse_strat        # QVL - Strategy to collapse the averages
-        self.data: List[Tuple]      = []
+        self.logger                                    = logging.getLogger(type(self).__name__)
+        self.root                                      = pathlib.Path(root)
+        self.filenames_filter                          = filenames_filter
+        self.metadata                                  = metadata
+        self.dataset_description                       = dataset_description
+        self.text_description                          = text_description
+        self.compute_mask                              = compute_mask              # QVL - Compute the mask for the ACS region
+        self.store_applied_acs_mask                    = store_applied_acs_mask    # QVL - Store the applied ACS mask in the dataset 
+        self.average_collapse_strat                    = avg_collapse_strat        # QVL - Strategy to collapse the averages and remove the average dimension
+        self.add_gaussian_noise                        = add_gaussian_noise        # QVL - Add gaussian noise to the k-space data, now add noise_fraction
+        self.noise_fraction                            = noise_fraction            # QVL - Fraction of noise to add to the k-space data
+        self.data: List[Tuple]                         = []
         self.volume_indices: Dict[pathlib.Path, range] = {}
+
+        self.logger.info(f"Extra QvL settings: compute_mask (bool): {self.compute_mask}")
+        self.logger.info(f"Extra QvL settings: store_applied_acs_mask (bool): {self.store_applied_acs_mask}")
+        self.logger.info(f"Extra QvL settings: average_collapse_strat (str): {self.average_collapse_strat}")
+        self.logger.info(f"Extra QvL settings: add_gaussian_noise (bool): {self.add_gaussian_noise}")
+        self.logger.info(f"Extra QvL settings: noise_fraction (float): {self.noise_fraction}")
+        self.logger.info(f"Kspace context: {kspace_context}. If 0 it means we only consider the corrent slice. if not we consider the slices around the slice.")   
         
         # If filenames_filter and filenames_lists are given, it will load files in filenames_filter
         # and filenames_lists will be ignored.
@@ -259,6 +270,12 @@ class H5WithAvgsSliceData(Dataset):
         if kspace.ndim == 2:  # Singlecoil data does not always have coils at the first axis.
             kspace = kspace[np.newaxis, ...]
 
+        # Add Gaussian noise if the flag is set
+        if self.add_gaussian_noise:
+            sigma = self.compute_noise_sigma(kspace, fraction=self.noise_fraction)
+            kspace = self.apply_gaussian_noise_to_measured_lines(kspace, sigma)
+            self.logger.info(f"QVL - Added Gaussian noise with sigma {sigma} to k-space data.")
+
         # TODO: Write a custom collate function which disables batching for certain keys
         sample = {
             "kspace": kspace,
@@ -293,6 +310,53 @@ class H5WithAvgsSliceData(Dataset):
                 sample[key] = curr_slice
 
         return sample
+    
+
+    def apply_gaussian_noise_to_measured_lines(self, kspace: np.ndarray, sigma: float) -> np.ndarray:
+        """
+        Apply Gaussian noise only to the measured (non-zero) lines in the k-space data.
+        
+        Args:
+            kspace (np.ndarray): K-space data.
+            sigma (float): Standard deviation of the Gaussian noise.
+        
+        Returns:
+            np.ndarray: K-space data with added Gaussian noise.
+        """
+        assert isinstance(kspace, np.ndarray), "kspace must be a numpy array"
+        assert isinstance(sigma, float) and sigma > 0, "sigma must be a positive float"
+        assert kspace.ndim == 4, "kspace must have 4 dimensions (slices, coils, rows, columns)"
+
+        noise = sigma * (np.random.randn(*kspace.shape) + 1j * np.random.randn(*kspace.shape))
+        kspace[np.abs(kspace) > 0] += noise[np.abs(kspace) > 0]
+        return kspace
+
+        
+    def compute_noise_sigma(self, kspace: np.ndarray, fraction: float = 0.01, debug: bool = False) -> float:
+        """
+        Compute noise sigma as a fraction of the maximum absolute value of the k-space data.
+        
+        Args:
+            kspace (np.ndarray): Collapsed k-space data, shape (slices, coils, rows, columns).
+            fraction (float): Fraction of the maximum amplitude to use as noise sigma.
+            debug (bool): If True, print debug information.
+            
+        Returns:
+            float: Computed noise sigma.
+        """
+        assert isinstance(kspace, np.ndarray), "kspace must be a numpy array"
+        assert kspace.ndim == 4, "kspace must have 4 dimensions (slices, coils, rows, columns)"
+        assert isinstance(fraction, float) and 0 < fraction < 1, "fraction must be a float between 0 and 1"
+
+        # Compute the maximum absolute value of the k-space data
+        max_val = np.max(np.abs(kspace))
+
+        sigma = fraction * max_val
+        if debug:
+            print(f"Computed noise sigma: {sigma}, with type: {type(sigma)} with fraction {fraction} and max_val {max_val}")
+
+        return sigma
+
 
     def get_slice_data(self, filename, slice_no, key="kspace", pass_attrs=False, extra_keys=None):
         avg1, avg2, avg3 = 0, 1, 2
@@ -347,11 +411,12 @@ class H5WithAvgsSliceData(Dataset):
             elif self.average_collapse_strat == "avg3":
                 avg_collapsed = data[key][avg3]
             
-            # Continue as normal.
+            # Continue as normal. Essentially if kspace_context = 0, we will always take the slice_no slice as the current slice. So nothing changes.
             curr_data = avg_collapsed[
                 max(0, slice_no - self.kspace_context) : min(slice_no + self.kspace_context + 1, num_slices),
             ]
             curr_shape = curr_data.shape
+            self.logger.info(f"QVL - curr_data.shape (v2) = {curr_data.shape}")
             if curr_shape[0] < num_slices - 1:
                 if slice_no - self.kspace_context < 0:
                     new_shape = list(curr_shape).copy()
@@ -369,6 +434,7 @@ class H5WithAvgsSliceData(Dataset):
                     )
             # Move the depth axis to the second spot.
             curr_data = np.swapaxes(curr_data, 0, 1)
+            self.logger.info(f"QVL - curr_data.shape (v3) = {curr_data.shape}")
 
         if pass_attrs:
             extra_data["attrs"] = dict(data.attrs)
@@ -379,6 +445,16 @@ class H5WithAvgsSliceData(Dataset):
                     raise ValueError("attrs need to be passed by setting `pass_attrs = True`.")
                 extra_data[extra_key] = data[extra_key][()]
         data.close()
+
+        # just some logging
+        self.logger.info(f"QVL - curr_data.shape = {curr_data.shape}")
+        self.logger.info(f"QVL - curr_data.dtype = {curr_data.dtype}")
+        for key, value in extra_data.items():
+            self.logger.info(f"QVL - extra_data[{key}] = {value}")
+            if isinstance(value, np.ndarray):
+                self.logger.info(f"QVL - extra_data[{key}].shape = {value.shape}")
+                self.logger.info(f"QVL - extra_data[{key}].dtype = {value.dtype}")
+
         return curr_data, extra_data
 
     def get_num_slices(self, filename):

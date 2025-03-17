@@ -80,6 +80,8 @@ def setup_inference_save_to_h5(
     -------
     None
     """
+
+    # Step 1 - Setup an inference environment where we can run the inference.
     env = setup_inference_environment(
         run_name, base_directory, device, machine_rank, mixed_precision, cfg_file, debug=debug
     )
@@ -98,6 +100,7 @@ def setup_inference_save_to_h5(
         filenames_filter = list(chunks(filenames_filter, process_per_chunk))
 
     logger.info(f"Predicting dataset and saving in: {output_directory}.")
+    logger.info(f"QVL - The variable is_validation is set to: {is_validation}.")
 
     if is_validation:
         print(f"QVL1 - Validation batch size: {env.cfg.validation.batch_size}")
@@ -106,28 +109,29 @@ def setup_inference_save_to_h5(
     else:
         batch_size, crop = env.cfg.inference.batch_size, env.cfg.inference.crop  # type: ignore
 
+    # Step 2 - Actually run the inference to make the reconstructions.
     for curr_filenames_filter in filenames_filter:
         output = inference_on_environment(
-            env=env,
-            data_root=data_root,
-            dataset_cfg=dataset_cfg,
-            transforms=transforms,
-            experiment_path=base_directory / run_name,
-            checkpoint=checkpoint,
-            num_workers=num_workers,
-            filenames_filter=curr_filenames_filter,
-            batch_size=batch_size,
-            crop=crop,
+            env              = env,
+            data_root        = data_root,
+            dataset_cfg      = dataset_cfg,
+            transforms       = transforms,
+            experiment_path  = base_directory / run_name,
+            checkpoint       = checkpoint,
+            num_workers      = num_workers,
+            filenames_filter = curr_filenames_filter,
+            batch_size       = batch_size,
+            crop             = crop,
         )
 
-        # Perhaps aggregation to the main process would be most optimal here before writing.
-        # The current way this write the volumes for each process.
+        # Step 3 - Write the output to disk.
         write_output_to_h5(
             output,
             output_directory,
             output_key          = "reconstruction",
             # acceleration_factor = env.cfg.inference.dataset.transforms.masking.accelerations[0],
-            acceleration_factor = env.cfg.inference.dataset.avg_acceleration,
+            # acceleration_factor = env.cfg.inference.dataset.avg_acceleration,
+            acceleration_factor = env.cfg.inference.dataset.transforms.masking.accelerations,
             modelname           = str(env.cfg.model.model_name).split('.')[-1],
             also_write_nifti    = False,
         )

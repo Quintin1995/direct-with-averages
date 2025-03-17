@@ -3,7 +3,7 @@
 
 import logging
 import pathlib
-from typing import Callable, DefaultDict, Dict, Optional, Union
+from typing import Callable, DefaultDict, Dict, Optional, Union, List
 
 import h5py  # type: ignore
 import numpy as np
@@ -20,7 +20,7 @@ def write_output_to_h5(
     output_key: str = "reconstruction",
     create_dirs_if_needed: bool = True,
     modelname = None,
-    acceleration_factor = None,
+    acceleration_factor: Optional[Union[float, List[float]]] = None,
     also_write_nifti = False,
 ) -> None:
     """Write dictionary with keys filenames and values torch tensors to h5 files.
@@ -39,8 +39,8 @@ def write_output_to_h5(
         If true, the output directory and all its parents will be created.
     modelname: str
         Name of the model.
-    acceleration_factor: float
-        Acceleration factor.
+    acceleration_factor: Can be a float or a list of floats.
+        Acceleration factor(s) for the reconstruction.
     also_write_nifti: bool
         If true, also write nifti files.
 
@@ -50,32 +50,53 @@ def write_output_to_h5(
     will be used.
     """
     if create_dirs_if_needed:
-        # Create output directory
         output_directory.mkdir(exist_ok=True, parents=True)
-        
+        logger.info(f"Output directory: {output_directory}")
+
     logger.info(f"length of output in write output to h5: {len(output)}")
     for idx, (volume, target, _, filename, samp_mask, pat_id) in enumerate(output):
+        
+        # some logging for debugging
+        if volume is not None:
+            logger.info(f"volume type: {type(volume)}, shape: {volume.shape}, dtype: {volume.dtype}")
+            volume_cpu = volume.cpu()  # if not already on CPU
+            arr = volume_cpu.numpy()
+            logger.info(f"Numpy array shape: {arr.shape}, dtype: {arr.dtype}")
+        else:
+            logger.info("volume is None!")
+        
+        if target is not None:
+            logger.info(f"target type: {type(target)}, shape: {target.shape}, dtype: {target.dtype}")
+            target_cpu = target.cpu()
+            arr = target_cpu.numpy()
+            logger.info(f"Numpy array shape: {arr.shape}, dtype: {arr.dtype}")
+        else:
+            logger.info("target is None!")
         
         # Create a per patient a directory
         pat_dir = output_directory / pat_id
         pat_dir.mkdir(exist_ok=True, parents=True)
+        logger.info(f"The patient directory is: {pat_dir}")
         
         # The output has shape (slice, 1, height, width)
         if isinstance(filename, pathlib.PosixPath):
             filename = filename.name
         logger.info(f"({idx + 1}/{len(output)}): Writing {pat_dir / filename}...")
             
-        reconstruction = volume.numpy()[:, 0, ...].astype(np.float32)
+        reconstruction = volume.cpu().numpy()[:, 0, ...].astype(np.float32)
         if target is not None:
-            target = target.numpy()[:, 0, ...].astype(np.float32)
+            target = target.cpu().numpy()[:, 0, ...].astype(np.float32)
         if samp_mask is not None:
-            samp_mask = samp_mask.numpy()[:, 0, ...].astype(np.float32)
+            samp_mask = samp_mask.cpu().numpy()[:, 0, ...].astype(np.float32)
 
         if volume_processing_func:
             reconstruction = volume_processing_func(reconstruction)
 
         # out_fname = pat_dir / f"{modelname}_R{int(acceleration_factor)}_recon.nii.gz"
         # logger.info(f"({idx + 1}/{len(output)}): Writing {out_fname}...")
+
+        if isinstance(acceleration_factor, list):
+            acceleration_factor = acceleration_factor[0]
         
         if also_write_nifti:
             # fname_recon_str  = str(out_fname).replace('.h5', '.nii.gz')
@@ -93,8 +114,10 @@ def write_output_to_h5(
             
         with h5py.File(pat_dir / filename, "w") as f:
             f.create_dataset(output_key, data=reconstruction)
-            f.create_dataset("target", data=target)
-            f.create_dataset("mask", data=samp_mask)
+            if target is not None:
+                f.create_dataset("target", data=target)
+            if samp_mask is not None:
+                f.create_dataset("mask", data=samp_mask)
             f.attrs["acceleration_factor"] = acceleration_factor
             f.attrs["modelname"] = modelname
 

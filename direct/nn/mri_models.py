@@ -128,9 +128,11 @@ class MRIModelEngine(Engine):
         with autocast(enabled=self.mixed_precision):
             data["sensitivity_map"] = self.compute_sensitivity_map(data["sensitivity_map"])
 
+            # Compute the Reconstruction and, then go from complex to real by computing the magnitude
             output_image, output_kspace = self.forward_function(data)
             output_image = T.modulus_if_complex(output_image, complex_axis=self._complex_dim)
 
+            # Initialize loss and regularizer dictionaries
             loss_dict = {k: torch.tensor([0.0], dtype=data["target"].dtype).to(self.device) for k in loss_fns.keys()}
             regularizer_dict = {
                 k: torch.tensor([0.0], dtype=data["target"].dtype).to(self.device) for k in regularizer_fns.keys()
@@ -829,11 +831,11 @@ class MRIModelEngine(Engine):
                 target_abs = _process_output(
                     data["target"],
                     scaling_factors,
-                    resolution=None,
-                    complex_axis=self._complex_dim,
+                    resolution   = None,
+                    complex_axis = self._complex_dim,
                 )
                 
-            if add_sampling_mask:   # qvl - the sampling mask is does not need cropping, modulus or scaling but only a dim must be added
+            if add_sampling_mask:   # QVL - the sampling mask is does not need cropping, modulus or scaling but only a dim must be added
                 samp_mask_abs = _process_output(
                     data["sampling_mask"],
                     scaling_factors = None,

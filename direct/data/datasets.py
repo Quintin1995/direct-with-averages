@@ -508,6 +508,7 @@ class FastMRIAvgCombDataset(H5WithAvgsSliceData):
         self.transform = transform
         self.compute_mask = compute_mask
 
+
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         sample = super().__getitem__(idx)
 
