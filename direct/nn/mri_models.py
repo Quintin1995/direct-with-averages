@@ -852,9 +852,14 @@ class MRIModelEngine(Engine):
                 if add_sampling_mask:
                     curr_samp_mask = torch.zeros(*(volume_size, *samp_mask_abs.shape[1:]), dtype=samp_mask_abs.dtype)
 
+            # Add the output to the volume
             curr_volume[slice_counter : slice_counter + output_abs.shape[0], ...] = output_abs.cpu()
+            
+            # Add the target to the volume
             if add_target:
                 curr_target[slice_counter : slice_counter + output_abs.shape[0], ...] = target_abs.cpu()  # type: ignore
+            
+            # Add the sampling mask to the volume
             if add_sampling_mask:
                 curr_samp_mask[slice_counter : slice_counter + output_abs.shape[0], ...] = samp_mask_abs.cpu() # type: ignore
 
@@ -874,15 +879,20 @@ class MRIModelEngine(Engine):
                 )
                 # Maybe not needed.
                 del data
-                yield(
-                    (curr_volume, curr_target, reduce_list_of_dicts(loss_dict_list), filename, curr_samp_mask, pat_id)
-                    if add_target
-                    else (
-                        curr_volume,
-                        reduce_list_of_dicts(loss_dict_list),
-                        filename,
-                    )
-                )
+                
+                # Yield the volume
+                if add_target and add_sampling_mask:
+                    yield (curr_volume, curr_target, reduce_list_of_dicts(loss_dict_list), filename, curr_samp_mask, pat_id)
+                
+                if add_target and not add_sampling_mask:
+                    yield (curr_volume, curr_target, reduce_list_of_dicts(loss_dict_list), filename, None, pat_id)
+
+                if not add_target and not add_sampling_mask:
+                    yield (curr_volume, None, reduce_list_of_dicts(loss_dict_list), filename, None, pat_id)
+
+                if not add_target and add_sampling_mask:
+                    yield (curr_volume, None, reduce_list_of_dicts(loss_dict_list), filename, curr_samp_mask, pat_id)
+
                 
                 
     @torch.no_grad()

@@ -4,6 +4,7 @@ import logging
 import pathlib
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
+from sqlite3 import connect
 
 import h5py
 import numpy as np
@@ -46,7 +47,9 @@ class H5WithAvgsSliceData(Dataset):
         store_applied_acs_mask: bool                           = True,
         avg_collapse_strat: str                                = None,
         add_gaussian_noise: bool                               = False,
-        noise_fraction: float                                  = 0.0005
+        noise_fraction: float                                  = 0.0005,
+        db_path: Optional[str]                                 = None,
+        tablename: Optional[str]                               = None,
     ) -> None:
         """Initialize the dataset.
 
@@ -115,6 +118,8 @@ class H5WithAvgsSliceData(Dataset):
         self.average_collapse_strat                    = avg_collapse_strat        # QVL - Strategy to collapse the averages and remove the average dimension
         self.add_gaussian_noise                        = add_gaussian_noise        # QVL - Add gaussian noise to the k-space data, now add noise_fraction
         self.noise_fraction                            = noise_fraction            # QVL - Fraction of noise to add to the k-space data
+        self.db_path                                   = db_path                   # QVL - Path to the database to use for the uncertainty quantification
+        self.tablename                                 = tablename                 # QVL - The tablename to use for the uncertainty quantification
         self.data: List[Tuple]                         = []
         self.volume_indices: Dict[pathlib.Path, range] = {}
 
@@ -124,7 +129,9 @@ class H5WithAvgsSliceData(Dataset):
         self.logger.info(f"Extra QvL settings: add_gaussian_noise (bool): {self.add_gaussian_noise}")
         self.logger.info(f"Extra QvL settings: noise_fraction (float): {self.noise_fraction}")
         self.logger.info(f"Kspace context: {kspace_context}. If 0 it means we only consider the corrent slice. if not we consider the slices around the slice.")   
-        
+        self.logger.info(f"Database path: {self.db_path}")
+        self.logger.info(f"Table name Uncertainty Quantification: {self.tablename}")
+
         # If filenames_filter and filenames_lists are given, it will load files in filenames_filter
         # and filenames_lists will be ignored.
         if filenames_filter is None:
@@ -175,6 +182,7 @@ class H5WithAvgsSliceData(Dataset):
 
         if self.text_description:
             self.logger.info("Dataset description: %s.", self.text_description)
+
 
     def parse_filenames_data(self, filenames, extra_h5s=None, filter_slice=None):
         current_slice_number = 0  # This is required to keep track of where a volume is in the dataset
@@ -254,6 +262,7 @@ class H5WithAvgsSliceData(Dataset):
     def __len__(self):
         return len(self.data)
 
+
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         filename, slice_no = self.data[idx]
         filename = pathlib.Path(filename)
@@ -262,7 +271,7 @@ class H5WithAvgsSliceData(Dataset):
         # filename = /scratch/p290820/datasets/003_umcg_pst_ksps/data/0007_ANON1586301/h5s/meas_MID00670_FID710360_T2_TSE_tra_obl-out_2.h5'
         # extract only patient_id = 0007_ANON1586301
         pat_id = filename.parts[-3]
-        
+
         kspace, extra_data = self.get_slice_data(
             filename, slice_no, pass_attrs=self.pass_attrs, extra_keys=self.extra_keys
         )
@@ -270,11 +279,15 @@ class H5WithAvgsSliceData(Dataset):
         if kspace.ndim == 2:  # Singlecoil data does not always have coils at the first axis.
             kspace = kspace[np.newaxis, ...]
 
-        # Add Gaussian noise if the flag is set
-        if self.add_gaussian_noise:
-            sigma = self.compute_noise_sigma(kspace, fraction=self.noise_fraction)
-            kspace = self.apply_gaussian_noise_to_measured_lines(kspace, sigma)
-            self.logger.info(f"QVL - Added Gaussian noise with sigma {sigma} to k-space data.")
+        self.logger.info(f"QVL - Patient ID: {pat_id}")
+        self.logger.info(f"QVL - kspace.shape = {kspace.shape}")
+        self.logger.info(f"QVL - kspace.dtype = {kspace.dtype}")
+        self.logger.info(f"QVL - coil dimension is the first dimension.")
+
+        if self.add_gaussian_noise: # kspace is 3D here, with dimensions (coils, rows, columns)
+            gaussian_id = self.get_gaussian_id(pat_id, debug = True)
+            sigma       = self.compute_noise_sigma(kspace, fraction=self.noise_fraction, debug = False)
+            kspace      = self.apply_gaussian_noise_to_measured_lines(kspace, sigma = sigma, seed = gaussian_id, debug = False)
 
         # TODO: Write a custom collate function which disables batching for certain keys
         sample = {
@@ -282,6 +295,7 @@ class H5WithAvgsSliceData(Dataset):
             "filename": str(filename),
             "slice_no": slice_no,
             "pat_id": pat_id,
+            "gaussian_id": gaussian_id if self.add_gaussian_noise else None,
         }
 
         # If the sensitivity maps exist, load these
@@ -312,49 +326,121 @@ class H5WithAvgsSliceData(Dataset):
         return sample
     
 
-    def apply_gaussian_noise_to_measured_lines(self, kspace: np.ndarray, sigma: float) -> np.ndarray:
+    def get_gaussian_id(self, pat_id: str, debug: bool = False) -> int:
         """
-        Apply Gaussian noise only to the measured (non-zero) lines in the k-space data.
+        Retrieve the gaussian_id for a patient from the database.
+        
+        Connects to the database, fetches the latest row for the patient,
+        and returns the existing gaussian_id if recon_path is NULL,
+        or increments it by one otherwise.
         
         Args:
-            kspace (np.ndarray): K-space data.
-            sigma (float): Standard deviation of the Gaussian noise.
-        
-        Returns:
-            np.ndarray: K-space data with added Gaussian noise.
-        """
-        assert isinstance(kspace, np.ndarray), "kspace must be a numpy array"
-        assert isinstance(sigma, float) and sigma > 0, "sigma must be a positive float"
-        assert kspace.ndim == 4, "kspace must have 4 dimensions (slices, coils, rows, columns)"
-
-        noise = sigma * (np.random.randn(*kspace.shape) + 1j * np.random.randn(*kspace.shape))
-        kspace[np.abs(kspace) > 0] += noise[np.abs(kspace) > 0]
-        return kspace
-
-        
-    def compute_noise_sigma(self, kspace: np.ndarray, fraction: float = 0.01, debug: bool = False) -> float:
-        """
-        Compute noise sigma as a fraction of the maximum absolute value of the k-space data.
-        
-        Args:
-            kspace (np.ndarray): Collapsed k-space data, shape (slices, coils, rows, columns).
-            fraction (float): Fraction of the maximum amplitude to use as noise sigma.
-            debug (bool): If True, print debug information.
+            pat_id (str): The patient identifier.
             
         Returns:
-            float: Computed noise sigma.
+            int: The gaussian_id to use.
+        """
+        conn = connect(self.db_path)  # Assumes self.db_path is defined in the class.
+        cursor = conn.cursor()
+        query = f"""
+            SELECT recon_path, gaussian_id
+            FROM {self.tablename}
+            WHERE id = ?
+            ORDER BY gaussian_id DESC
+            LIMIT 1;
+        """
+        cursor.execute(query, (pat_id,))
+        row = cursor.fetchone()
+        if row is None:
+            conn.close()
+            raise ValueError(f"No row found for patient ID: {pat_id}")
+        
+        recon_path, gaussian_id = row
+        
+        # If recon_path is NULL (None), return the existing gaussian_id; otherwise, increment it.
+        result = gaussian_id if recon_path is None else gaussian_id + 1
+        conn.close()
+
+        if debug:
+            self.logger.info(f"QVL - Returning gaussian_id: {result} for patient ID: {pat_id}. Gaussian_id was found to be {gaussian_id} and recon_path was found to be {recon_path}.")
+
+        return result
+        
+
+    def apply_gaussian_noise_to_measured_lines(self, kspace: np.ndarray, sigma: np.ndarray, seed: int = None, debug=False) -> np.ndarray:
+        """
+        Apply Gaussian noise only to the measured (non-zero) lines in the k-space data for a single slice.
+        
+        Assumes:
+            - kspace has shape (coils, rows, cols) for one slice.
+            - sigma is a 1D array of per-coil sigma values.
+        
+        Args:
+            kspace (np.ndarray): K-space data with shape (coils, rows, cols).
+            sigma (np.ndarray): 1D array of noise standard deviations for each coil.
+            seed (int, optional): Local random seed for reproducibility.
+        
+        Returns:
+            np.ndarray: K-space data with added Gaussian noise on measured lines.
+        """
+        # Check inputs
+        assert isinstance(kspace, np.ndarray), "kspace must be a numpy array"
+        assert kspace.ndim == 3, "kspace must have 3 dimensions (coils, rows, cols)"
+        assert isinstance(sigma, np.ndarray), "sigma must be a numpy array"
+        assert sigma.ndim == 1, "sigma must be a 1D array (one value per coil)"
+        assert sigma.shape[0] == kspace.shape[0], "Length of sigma must equal number of coils"
+        assert np.all(sigma > 0), "All sigma values must be positive"
+        
+        # Use a local random generator for reproducibility without affecting global state.
+        rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
+        
+        # Process each coil individually to save memory.
+        for c in range(kspace.shape[0]):
+            coil_data = kspace[c]  # shape: (rows, cols)
+            # Find indices where the coil has a measured (nonzero) value.
+            mask = np.nonzero(np.abs(coil_data) > 0)
+            if mask[0].size > 0:
+                # Number of measured elements in this coil.
+                n_measured = mask[0].size
+                # Generate noise only for these measured entries.
+                noise = sigma[c] * (rng.standard_normal(n_measured) + 1j * rng.standard_normal(n_measured))
+                # Add noise in-place.
+                coil_data[mask] += noise
+                kspace[c] = coil_data  # Update the coil's data.
+
+        if debug:
+            self.logger.info(f"QVL - Added Gaussian noise to k-space data with sigma values: {sigma}")
+        
+        return kspace
+    
+        
+    def compute_noise_sigma(self, kspace: np.ndarray, fraction: float = 0.01, debug: bool = False) -> np.ndarray:
+        """
+        Compute noise sigma for each coil as a fraction of the maximum absolute value of the k-space data.
+
+        Args:
+            kspace (np.ndarray): Collapsed k-space data for a single slice, shape (coils, rows, columns).
+            fraction (float): Fraction of the maximum amplitude to use as noise sigma.
+            debug (bool): If True, print debug information.
+
+        Returns:
+            np.ndarray: Array of computed noise sigma values per coil, shape (coils,).
         """
         assert isinstance(kspace, np.ndarray), "kspace must be a numpy array"
-        assert kspace.ndim == 4, "kspace must have 4 dimensions (slices, coils, rows, columns)"
+        # Now we expect kspace to have 3 dimensions: (coils, rows, columns)
+        assert kspace.ndim == 3, "kspace must have 3 dimensions (coils, rows, columns)"
         assert isinstance(fraction, float) and 0 < fraction < 1, "fraction must be a float between 0 and 1"
-
-        # Compute the maximum absolute value of the k-space data
-        max_val = np.max(np.abs(kspace))
-
-        sigma = fraction * max_val
+        
+        # Compute the maximum absolute value for each coil (over rows and columns)
+        max_vals = np.max(np.abs(kspace), axis=(1, 2))
+        sigma = fraction * max_vals
+        
         if debug:
-            print(f"Computed noise sigma: {sigma}, with type: {type(sigma)} with fraction {fraction} and max_val {max_val}")
+            print(f"Per-coil maximum values: {max_vals}")
+            print(f"Computed noise sigma per coil: {sigma}")
 
+        assert sigma.shape[0] == kspace.shape[0], "sigma must have the same length as the number of coils"
+        
         return sigma
 
 
@@ -449,11 +535,11 @@ class H5WithAvgsSliceData(Dataset):
         # just some logging
         self.logger.info(f"QVL - curr_data.shape = {curr_data.shape}")
         self.logger.info(f"QVL - curr_data.dtype = {curr_data.dtype}")
-        for key, value in extra_data.items():
-            self.logger.info(f"QVL - extra_data[{key}] = {value}")
-            if isinstance(value, np.ndarray):
-                self.logger.info(f"QVL - extra_data[{key}].shape = {value.shape}")
-                self.logger.info(f"QVL - extra_data[{key}].dtype = {value.dtype}")
+        # for key, value in extra_data.items():
+        #     self.logger.info(f"QVL - extra_data[{key}] = {value}")
+        #     if isinstance(value, np.ndarray):
+        #         self.logger.info(f"QVL - extra_data[{key}].shape = {value.shape}")
+        #         self.logger.info(f"QVL - extra_data[{key}].dtype = {value.dtype}")
 
         return curr_data, extra_data
 

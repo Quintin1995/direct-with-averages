@@ -85,7 +85,6 @@ def setup_inference_save_to_h5(
     env = setup_inference_environment(
         run_name, base_directory, device, machine_rank, mixed_precision, cfg_file, debug=debug
     )
-
     dataset_cfg, transforms = get_inference_settings(env)
 
     # Trigger cudnn benchmark when the number of different input masks_dict is small.
@@ -125,15 +124,20 @@ def setup_inference_save_to_h5(
         )
 
         # Step 3 - Write the output to disk.
+        acceleration_factor = env.cfg.inference.dataset.transforms.masking.accelerations if hasattr(env.cfg.inference.dataset.transforms.masking, "accelerations") else env.cfg.inference.dataset.avg_acceleration
+        modelname = str(env.cfg.model.model_name).split('.')[-1]
+        
         write_output_to_h5(
             output,
             output_directory,
-            output_key          = "reconstruction",
-            # acceleration_factor = env.cfg.inference.dataset.transforms.masking.accelerations[0],
-            # acceleration_factor = env.cfg.inference.dataset.avg_acceleration,
-            acceleration_factor = env.cfg.inference.dataset.transforms.masking.accelerations,
-            modelname           = str(env.cfg.model.model_name).split('.')[-1],
-            also_write_nifti    = False,
+            output_key           = "reconstruction",
+            acceleration_factor  = acceleration_factor,
+            modelname            = modelname,
+            also_write_nifti     = True,
+            do_round             = False,
+            added_gaussian_noise = env.cfg.inference.dataset.add_gaussian_noise,
+            db_path              = env.cfg.inference.dataset.db_path,
+            tablename            = env.cfg.inference.dataset.tablename,
         )
 
 
