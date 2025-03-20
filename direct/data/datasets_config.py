@@ -102,13 +102,13 @@ class FastMRIConfig(H5SliceConfig):
 
 
 @dataclass
-class FastMRIAvgCombConfig(H5SliceConfig):
+class FastMRIAvgCombConfig(H5SliceConfig):      # The configuration for the FastMRI dataset with added averages
     pass_attrs: bool = True
-    avg_acceleration: float = 1.0       # the acceleration as string based on leaving out averages with added equispaced acceleration symbolising the application of a GRAPPA factor for example
+    avg_acceleration: float = 1.0                   # the acceleration as string based on leaving out averages with added equispaced acceleration symbolising the application of a GRAPPA factor for example
     echo_train_length: Optional[int] = 25           # The echo train length of the data, typically 25
     leave_out_echo_trains: Optional[int] = 2        # The number of echo trains to leave out for leave-X-out uncertainty quantification
     add_gaussian_noise: Optional[bool] = False      # Add Gaussian noise to the data
-    noise_fraction: Optional[float] = 0.0005        # The fraction of noise to add to the data, determined empirically based on the max of the data
+    noise_mult: Optional[float] = 2.5               # The fraction of noise to add to the data, determined empirically based on the max of the data
     db_path: Optional[str] = None                   # The path to the database to use for the uncertainty quantification
     tablename: Optional[str] = "patients_uq"        # The tablename to use for the uncertainty quantification
     

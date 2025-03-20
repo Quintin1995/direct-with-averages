@@ -465,7 +465,7 @@ class FastMRIAvgCombDataset(H5WithAvgsSliceData):
         store_applied_acs_mask: bool                           = False,
         avg_collapse_strat: str                                = "allavg",
         add_gaussian_noise: bool                               = False,
-        noise_fraction: float                                  = 0.0005,
+        noise_mult: float                                      = 2.5,
         db_path: Optional[str]                                 = None,
         tablename: Optional[str]                               = None,
         **kwargs,
@@ -494,7 +494,7 @@ class FastMRIAvgCombDataset(H5WithAvgsSliceData):
             store_applied_acs_mask = store_applied_acs_mask,
             avg_collapse_strat     = avg_collapse_strat,
             add_gaussian_noise     = add_gaussian_noise,
-            noise_fraction         = noise_fraction,
+            noise_mult             = noise_mult,
             db_path                = db_path,
             tablename              = tablename,
         )

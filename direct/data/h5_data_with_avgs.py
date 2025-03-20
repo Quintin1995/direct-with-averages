@@ -5,6 +5,7 @@ import pathlib
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 from sqlite3 import connect
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -47,7 +48,7 @@ class H5WithAvgsSliceData(Dataset):
         store_applied_acs_mask: bool                           = True,
         avg_collapse_strat: str                                = None,
         add_gaussian_noise: bool                               = False,
-        noise_fraction: float                                  = 0.0005,
+        noise_mult: float                                      = 2.5,
         db_path: Optional[str]                                 = None,
         tablename: Optional[str]                               = None,
     ) -> None:
@@ -116,10 +117,11 @@ class H5WithAvgsSliceData(Dataset):
         self.compute_mask                              = compute_mask              # QVL - Compute the mask for the ACS region
         self.store_applied_acs_mask                    = store_applied_acs_mask    # QVL - Store the applied ACS mask in the dataset 
         self.average_collapse_strat                    = avg_collapse_strat        # QVL - Strategy to collapse the averages and remove the average dimension
-        self.add_gaussian_noise                        = add_gaussian_noise        # QVL - Add gaussian noise to the k-space data, now add noise_fraction
-        self.noise_fraction                            = noise_fraction            # QVL - Fraction of noise to add to the k-space data
+        self.add_gaussian_noise                        = add_gaussian_noise        # QVL - Add gaussian noise to the k-space data, now add noise_mult
+        self.noise_mult                                = noise_mult                # QVL - Fraction of noise to add to the k-space data
         self.db_path                                   = db_path                   # QVL - Path to the database to use for the uncertainty quantification
-        self.tablename                                 = tablename                 # QVL - The tablename to use for the uncertainty quantification
+        self.tablename_uq                              = tablename                 # QVL - The tablename to use for the uncertainty quantification
+        self.tablename_noise                           = "noise_estimation"        # QVL - Table in the DB where the noise levels for each patient for each coil are stored.
         self.data: List[Tuple]                         = []
         self.volume_indices: Dict[pathlib.Path, range] = {}
 
@@ -127,10 +129,10 @@ class H5WithAvgsSliceData(Dataset):
         self.logger.info(f"Extra QvL settings: store_applied_acs_mask (bool): {self.store_applied_acs_mask}")
         self.logger.info(f"Extra QvL settings: average_collapse_strat (str): {self.average_collapse_strat}")
         self.logger.info(f"Extra QvL settings: add_gaussian_noise (bool): {self.add_gaussian_noise}")
-        self.logger.info(f"Extra QvL settings: noise_fraction (float): {self.noise_fraction}")
+        self.logger.info(f"Extra QvL settings: noise_mult (float): {self.noise_mult}")
         self.logger.info(f"Kspace context: {kspace_context}. If 0 it means we only consider the corrent slice. if not we consider the slices around the slice.")   
         self.logger.info(f"Database path: {self.db_path}")
-        self.logger.info(f"Table name Uncertainty Quantification: {self.tablename}")
+        self.logger.info(f"Table name Uncertainty Quantification: {self.tablename_uq}")
 
         # If filenames_filter and filenames_lists are given, it will load files in filenames_filter
         # and filenames_lists will be ignored.
@@ -263,6 +265,68 @@ class H5WithAvgsSliceData(Dataset):
         return len(self.data)
 
 
+    # lets make a parser that parses the string with , 2.189615383451e-06 as a float list into an np.float array
+    def parse_noise_coils_list(self, noise_coils_list: str) -> np.ndarray:
+        """
+        Parse the noise_coils_list string into a numpy array of floats.
+        
+        Args:
+            noise_coils_list (str): Comma-separated string of floats.
+        
+        Returns:
+            np.ndarray: Array of floats.
+        """
+        # Split the string by commas and convert each element to a float.
+        noise_list = [float(val) for val in noise_coils_list.split(',')]
+        return np.array(noise_list)
+
+
+    def get_noise_coil_list_from_db(self, pat_id: str, debug = False) -> np.ndarray:
+        # sorry this is hardcoded for now
+        db_path = Path("/home1/p290820/repos/Uncertainty-Quantification-Prostate-MRI/databases/master_habrok_20231106_v2.db")
+
+        conn = connect(str(db_path))
+        c = conn.cursor()
+        query = "SELECT * FROM noise_estimation WHERE id = ?"
+        c.execute(query, (pat_id.strip(),))
+        _, _, _, _, noise_coils_list, _, _ = c.fetchone()
+        conn.close()
+
+        # The found noise is a  list of floats as a string, we need to parse it into a numpy array.
+        emperical_noise = self.parse_noise_coils_list(noise_coils_list)
+
+        if debug: 
+            print(type(emperical_noise))
+            print(emperical_noise)
+
+        return emperical_noise
+
+
+    def apply_mult_gaussian_noise_to_measured_lines(self, kspace: np.ndarray, empirical_noise: np.ndarray, noise_multiplier: float, seed: int = None, debug=False) -> np.ndarray:
+        # Scale the baseline noise by the multiplier.
+        scaled_sigma = noise_multiplier * empirical_noise
+        if debug:
+            self.logger.info(f"Applying increased noise with sigma: {scaled_sigma}")
+        rng = np.random.default_rng(seed)
+
+        # Create a copy to hold the noisy k-space data.
+        noisy_kspace = kspace.copy()
+        coils, rows, cols = kspace.shape
+
+        for c in range(coils):
+            coil_data = noisy_kspace[c].copy()  # shape: (rows, cols)
+            # Find indices where the coil has measured (nonzero) data.
+            mask = np.nonzero(np.abs(coil_data) > 0)
+            if mask[0].size > 0:
+                n_measured = mask[0].size
+                # Generate complex Gaussian noise for these measured entries,
+                # scaled by the increased sigma for the current coil.
+                coil_data[mask] += scaled_sigma[c] * (rng.standard_normal(n_measured) + 1j * rng.standard_normal(n_measured))
+            noisy_kspace[c] = coil_data
+
+        return noisy_kspace
+
+
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         filename, slice_no = self.data[idx]
         filename = pathlib.Path(filename)
@@ -285,9 +349,11 @@ class H5WithAvgsSliceData(Dataset):
         self.logger.info(f"QVL - coil dimension is the first dimension.")
 
         if self.add_gaussian_noise: # kspace is 3D here, with dimensions (coils, rows, columns)
+            # sigma       = self.compute_noise_sigma(kspace, fraction=self.noise_mult, debug = False)
+            # kspace      = self.apply_gaussian_noise_to_measured_lines(kspace, sigma=sigma, seed=gaussian_id, debug=False)
             gaussian_id = self.get_gaussian_id(pat_id, debug = True)
-            sigma       = self.compute_noise_sigma(kspace, fraction=self.noise_fraction, debug = False)
-            kspace      = self.apply_gaussian_noise_to_measured_lines(kspace, sigma = sigma, seed = gaussian_id, debug = False)
+            empri_noise = self.get_noise_coil_list_from_db(pat_id, debug = True)
+            kspace      = self.apply_mult_gaussian_noise_to_measured_lines(kspace=kspace, empirical_noise=empri_noise, noise_multiplier=self.noise_mult, seed=gaussian_id, debug=True)
 
         # TODO: Write a custom collate function which disables batching for certain keys
         sample = {
@@ -344,7 +410,7 @@ class H5WithAvgsSliceData(Dataset):
         cursor = conn.cursor()
         query = f"""
             SELECT recon_path, gaussian_id
-            FROM {self.tablename}
+            FROM {self.tablename_uq}
             WHERE id = ?
             ORDER BY gaussian_id DESC
             LIMIT 1;
