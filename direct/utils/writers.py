@@ -297,8 +297,8 @@ def process_patient_output(
         f.create_dataset(output_key, data=volume_np)
         if target_np is not None:
             f.create_dataset("target", data=target_np)
-        if samp_mask_np is not None:
-            f.create_dataset("mask", data=samp_mask_np)
+        # if samp_mask_np is not None:
+        #     f.create_dataset("mask", data=samp_mask_np)
         f.attrs["acceleration_factor"] = acceleration_factor
         f.attrs["modelname"] = modelname
     logger.info(f"Wrote H5 file: {h5_path}")
