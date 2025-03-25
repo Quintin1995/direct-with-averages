@@ -15,121 +15,6 @@ from sqlite3 import connect
 logger = logging.getLogger(__name__)
 
 
-# def write_output_to_h5(
-#     output: Union[Dict, DefaultDict],
-#     output_directory: pathlib.Path,
-#     volume_processing_func: Optional[Callable]               = None,
-#     output_key: str                                          = "reconstruction",
-#     create_dirs_if_needed: bool                              = True,
-#     modelname                                                = None,
-#     acceleration_factor: Optional[Union[float, List[float]]] = None,
-#     also_write_nifti                                         = False,
-#     fnamepart                                                = None,
-#     do_round                                                 = False,
-# ) -> None:
-#     """Write dictionary with keys filenames and values torch tensors to h5 files.
-
-#     Parameters
-#     ----------
-#     output: dict
-#         Dictionary with keys filenames and values torch.Tensor's with shape [depth, num_channels, ...]
-#         where num_channels is typically 1 for MRI.
-#     output_directory: pathlib.Path
-#     volume_processing_func: callable
-#         Function which postprocesses the volume array before saving.
-#     output_key: str
-#         Name of key to save the output to.
-#     create_dirs_if_needed: bool
-#         If true, the output directory and all its parents will be created.
-#     modelname: str
-#         Name of the model.
-#     acceleration_factor: Can be a float or a list of floats.
-#         Acceleration factor(s) for the reconstruction.
-#     also_write_nifti: bool
-#         If true, also write nifti files.
-
-#     Notes
-#     -----
-#     Currently only num_channels = 1 is supported. If you run this function with more channels the first one
-#     will be used.
-#     """
-#     if create_dirs_if_needed:
-#         output_directory.mkdir(exist_ok=True, parents=True)
-#         logger.info(f"Output directory: {output_directory}")
-
-#     logger.info(f"length of output in write output to h5: {len(output)}")
-#     for idx, (volume, target, _, filename, samp_mask, pat_id) in enumerate(output):
-        
-#         # some logging for debugging
-#         if volume is not None:
-#             logger.info(f"volume type: {type(volume)}, shape: {volume.shape}, dtype: {volume.dtype}")
-#             volume_cpu = volume.cpu()  # if not already on CPU
-#             arr = volume_cpu.numpy()
-#             logger.info(f"Numpy array shape: {arr.shape}, dtype: {arr.dtype}")
-#         else:
-#             logger.info("volume is None!")
-        
-#         if target is not None:
-#             logger.info(f"target type: {type(target)}, shape: {target.shape}, dtype: {target.dtype}")
-#             target_cpu = target.cpu()
-#             arr = target_cpu.numpy()
-#             logger.info(f"Numpy array shape: {arr.shape}, dtype: {arr.dtype}")
-#         else:
-#             logger.info("target is None!")
-        
-#         # Create per patient a directory
-#         pat_dir = output_directory / pat_id
-#         pat_dir.mkdir(exist_ok=True, parents=True)
-#         logger.info(f"The patient directory is: {pat_dir}")
-        
-#         # The output has shape (slice, 1, height, width)
-#         if isinstance(filename, pathlib.PosixPath):
-#             filename = filename.name
-#         logger.info(f"({idx + 1}/{len(output)}): Writing {pat_dir / filename}...")
-            
-#         reconstruction = volume.cpu().numpy()[:, 0, ...].astype(np.float32)
-#         if target is not None:
-#             target = target.cpu().numpy()[:, 0, ...].astype(np.float32)
-#         if samp_mask is not None:
-#             samp_mask = samp_mask.cpu().numpy()[:, 0, ...].astype(np.float32)
-
-#         if volume_processing_func:
-#             reconstruction = volume_processing_func(reconstruction)
-
-#         # out_fname = pat_dir / f"{modelname}_R{int(acceleration_factor)}_recon.nii.gz"
-#         # logger.info(f"({idx + 1}/{len(output)}): Writing {out_fname}...")
-
-#         if isinstance(acceleration_factor, list):
-#             acceleration_factor = acceleration_factor[0]
-        
-#         if also_write_nifti:
-#             # fname_recon_str  = str(out_fname).replace('.h5', '.nii.gz')
-#             fname_recon_str = pat_dir / f"{modelname}_R{int(acceleration_factor)}_recon.nii.gz"
-#             # fname_target_str = str(out_fname).replace('.h5', '_target.nii.gz')
-#             fname_target_str = pat_dir / f"{modelname}_R{int(acceleration_factor)}_target.nii.gz"
-#             write_numpy_to_nifti(reconstruction, out_fname=fname_recon_str)
-#             if target is not None:
-#                 write_numpy_to_nifti(target, out_fname=fname_target_str)
-            
-#         if samp_mask is not None:
-#             # fname_mask_str = str(out_fname).replace('.h5', '_mask.nii.gz')
-#             fname_mask_str = pat_dir / f"{modelname}_R{int(acceleration_factor)}_mask.nii.gz"
-#             write_numpy_to_nifti(samp_mask, out_fname=fname_mask_str, do_round=False)
-
-#         if fnamepart is not None:
-#             # we this fnamepart right before the file extension
-#             filename = filename.replace(".h5", f"_{fnamepart}.h5")
-
-#         with h5py.File(pat_dir / filename, "w") as f:
-#             f.create_dataset(output_key, data=reconstruction)
-#             if target is not None:
-#                 f.create_dataset("target", data=target)
-#             if samp_mask is not None:
-#                 f.create_dataset("mask", data=samp_mask)
-#             f.attrs["acceleration_factor"] = acceleration_factor
-#             f.attrs["modelname"] = modelname
-
-
 def round_volume(volume: np.ndarray, decimals: int = 3) -> np.ndarray:
     """
     Round the volume to a specified number of decimals.
@@ -137,83 +22,104 @@ def round_volume(volume: np.ndarray, decimals: int = 3) -> np.ndarray:
     return np.round(volume, decimals=decimals)
 
 
-def get_gaussian_id(pat_id: str, db_path: str, tablename: str, filename: pathlib.Path, debug: bool = False) -> int:
+def get_gaussian_id(
+        pat_id: str,
+        db_path: str,
+        tablename: str,
+        filename: pathlib.Path,
+        avg_acc: float = None,
+        debug: bool = False) -> int:
     """
-    Retrieve the gaussian_id for a patient from the database.
+    Retrieve and update the gaussian_id for a patient in the database.
     
-    Connects to the database, fetches the latest row for the patient,
-    and returns the existing gaussian_id if recon_path is NULL,
-    or increments it by one otherwise. Also updates the recon_path if it was NULL.
+    Steps:
+    1. Query the latest row for the patient (with matching avg_acceleration).
+    2. If the current row's recon_path is NULL:
+         - Update the row with a new recon_path (filename with gaussian_id appended).
+         - Insert a new row with gaussian_id incremented by 1 (and recon_path as NULL).
+       Else (if recon_path is not NULL):
+         - Insert a new row with gaussian_id incremented by 1.
+    3. Return the new gaussian_id to be used.
+    
+    This guarantees that each call creates a new row for the next iteration.
     
     Args:
         pat_id (str): The patient identifier.
         db_path (str): Path to the database.
         tablename (str): Name of the table in the database.
-        filename (str): The filename to set as recon_path if it was NULL.
+        filename (Path): The filename to set as recon_path if it was NULL.
+        avg_acc (float): Average acceleration factor (cast to float if stored as int in DB).
         debug (bool): Flag to enable debug logging.
         
     Returns:
-        int: The gaussian_id to use.
+        int: The new gaussian_id to use.
     """
     conn = connect(db_path)
     cursor = conn.cursor()
+    
+    # Query the latest row for the patient with the given acceleration factor.
     query = f"""
-        SELECT id, seq_id, anon_id, gaussian_id, recon_path
+        SELECT id, seq_id, anon_id, gaussian_id, recon_path, avg_acceleration
         FROM {tablename}
-        WHERE id = ?
+        WHERE id = ? AND avg_acceleration = ?
         ORDER BY gaussian_id DESC
         LIMIT 1;
     """
-    cursor.execute(query, (pat_id,))
+    cursor.execute(query, (pat_id, avg_acc))
     row = cursor.fetchone()
     if row is None:
         conn.close()
-        raise ValueError(f"No row found for patient ID: {pat_id} in writers.py")
+        message = (f"QVL - Writers.py - No row found for patient ID: {pat_id} "
+                   f"and avg_acceleration: {avg_acc}. Query: {query} "
+                   f"db_path: {db_path} tablename: {tablename} filename: {filename}")
+        raise ValueError(message)
     
-    id, seq_id, anon_id, gaussian_id, recon_path = row
+    id_val, seq_id, anon_id, gaussian_id, recon_path, avg_acc = row
     
     if debug:
-        logger.info(f"QVL - Writers.py - Retrieved gaussian_id: {gaussian_id} for patient ID: {pat_id}. recon_path was found to be {recon_path}.")
+        # (Assuming logger is defined elsewhere, or you can use print statements)
+        logger.info(f"QVL - Writers.py - Retrieved gaussian_id: {gaussian_id} for patient ID: {pat_id}. "
+                    f"recon_path: {recon_path}.")
     
+    new_gaussian_id = gaussian_id + 1
+    
+    # If recon_path is NULL, update the current row with a new recon_path.
     if recon_path is None:
-        # we must add the gaussian_id to the filename before the extension
+        # Append the current gaussian_id to the filename before the extension.
         new_filename = filename.stem + f"_{gaussian_id}" + filename.suffix
-        # Update the recon_path for the current row
         update_query = f"""
             UPDATE {tablename}
             SET recon_path = ?
-            WHERE id = ? AND gaussian_id = ?;
+            WHERE id = ? AND gaussian_id = ? AND avg_acceleration = ?;
         """
-        cursor.execute(update_query, (str(filename.with_name(new_filename)), pat_id, gaussian_id))
+        cursor.execute(update_query, (str(filename.with_name(new_filename)), pat_id, gaussian_id, avg_acc))
         conn.commit()
         
         if debug:
-            logger.info(f"QVL - Writers.py - Updated recon_path to {filename} for patient ID: {pat_id} with gaussian_id: {gaussian_id}.")
-        
-        # Insert a new row with incremented gaussian_id and recon_path set to NULL
-        insert_query = f"""
-            INSERT INTO {tablename} (id, seq_id, anon_id, gaussian_id, recon_path)
-            VALUES (?, ?, ?, ?, NULL);
-        """
-        cursor.execute(insert_query, (pat_id, seq_id, anon_id, gaussian_id + 1))
-        conn.commit()
-        
-        if debug:
-            logger.info(f"QVL - Writers.py - Inserted new row for patient ID: {pat_id} with gaussian_id: {gaussian_id + 1} and recon_path set to NULL.")
-        
-        result = gaussian_id
-    else:
-        result = gaussian_id + 1
+            logger.info(f"QVL - Writers.py - Updated recon_path to {new_filename} for patient ID: {pat_id} "
+                        f"with gaussian_id: {gaussian_id}.")
+    
+    # In both cases, insert a new row with the incremented gaussian_id and recon_path set to NULL.
+    insert_query = f"""
+        INSERT INTO {tablename} (id, seq_id, anon_id, gaussian_id, recon_path, avg_acceleration)
+        VALUES (?, ?, ?, ?, NULL, ?);
+    """
+    cursor.execute(insert_query, (pat_id, seq_id, anon_id, new_gaussian_id, avg_acc))
+    conn.commit()
+    
+    if debug:
+        logger.info(f"QVL - Writers.py - Inserted new row for patient ID: {pat_id} with gaussian_id: {new_gaussian_id} "
+                    f"and recon_path set to NULL. avg_acceleration: {avg_acc}")
     
     conn.close()
-    return result
+    return new_gaussian_id
 
 
 def process_patient_output(
     patient_data: tuple,
     pat_dir: pathlib.Path,
     modelname: str,
-    acceleration_factor: float,
+    avg_acc: float    = None,
     output_key: str                   = "reconstruction",
     volume_processing_func: callable  = None,
     do_round: bool                    = False,
@@ -230,25 +136,33 @@ def process_patient_output(
       (volume, target, _, filename, samp_mask, pat_id)
     where volume is a torch tensor with shape [slices, 1, height, width].
     """
+    assert avg_acc is not None, "avg_acceleration_factor must be provided."
+    assert modelname is not None, "modelname must be provided."
+    assert db_path is not None, "db_path must be provided."
+    assert tablename is not None, "tablename must be provided."
+
     volume, target, _, filename, samp_mask, pat_id = patient_data
 
-    print(f"Shape of the volume: {volume.shape}")
-    print(f"Shape of the target: {target.shape}") if target is not None else None
-    print(f"The filename is: {filename}")
-    print(f"The patient ID is: {pat_id}")
-    print(f"Type patient id: {type(pat_id)}")
+    print(f"Writer - Shape of the volume: {volume.shape}")
+    print(f"Writer - Shape of the target: {target.shape}") if target is not None else None
+    print(f"Writer - The filename is: {filename}")
+    print(f"Writer - The patient ID is: {pat_id}")
+    print(f"Writer - Type patient id: {type(pat_id)}")
+    print(f"Writer - The avg_acceleration_factor is: {avg_acc}") 
 
     # here we connect with the database and see if what the gaussian noise index should be for this patient and update the database with a new row, so that the next time it will be updated with a new index
     if added_gaussian_noise:
-        conn = connect(db_path)
-        c = conn.cursor()
-        gaussian_id = get_gaussian_id(str(pat_id), db_path, tablename, pat_dir / filename)
-
+        gaussian_id = get_gaussian_id(
+            pat_id    = str(pat_id),
+            db_path   = db_path,
+            tablename = tablename,
+            filename  = pat_dir / filename,
+            avg_acc   = avg_acc,
+            debug     = True)
         # Modify filename with fnamepart if provided
         if isinstance(filename, pathlib.PosixPath):
             filename = filename.name
         filename = filename.replace(".h5", f"_gaus{gaussian_id}.h5")
-        conn.close()
     else:
         gaussian_id = ""
 
@@ -280,15 +194,15 @@ def process_patient_output(
     # Save as NIfTI if requested
     if also_write_nifti:
         # 1 - Write the reconstruction
-        fname_recon = pat_dir / f"{modelname}_R{int(acceleration_factor)}_recon_gaus{gaussian_id}.nii.gz"
+        fname_recon = pat_dir / f"{modelname}_R{int(avg_acc)}_recon_gaus{gaussian_id}.nii.gz"
         write_numpy_to_nifti(volume_np, fname_recon)
         # 2 - Write the target
         if target_np is not None:
-            fname_target = pat_dir / f"{modelname}_R{int(acceleration_factor)}_target.nii.gz"
+            fname_target = pat_dir / f"{modelname}_R{int(avg_acc)}_target.nii.gz"
             write_numpy_to_nifti(target_np, fname_target)
         # 3 - Write the sampling mask
         if samp_mask_np is not None:
-            fname_mask = pat_dir / f"{modelname}_R{int(acceleration_factor)}_mask.nii.gz"
+            fname_mask = pat_dir / f"{modelname}_R{int(avg_acc)}_mask.nii.gz"
             write_numpy_to_nifti(samp_mask_np, fname_mask)
     
     # Write the output to an H5 file
@@ -297,9 +211,9 @@ def process_patient_output(
         f.create_dataset(output_key, data=volume_np)
         if target_np is not None:
             f.create_dataset("target", data=target_np)
-        # if samp_mask_np is not None:
-        #     f.create_dataset("mask", data=samp_mask_np)
-        f.attrs["acceleration_factor"] = acceleration_factor
+        if samp_mask_np is not None:
+            f.create_dataset("mask", data=samp_mask_np)
+        f.attrs["acceleration_factor"] = avg_acc
         f.attrs["modelname"] = modelname
     logger.info(f"Wrote H5 file: {h5_path}")
 
@@ -307,17 +221,17 @@ def process_patient_output(
 def write_output_to_h5(
     output: list,
     output_directory: pathlib.Path,
-    volume_processing_func: callable                = None,
-    output_key: str                                 = "reconstruction",
-    create_dirs_if_needed: bool                     = True,
-    modelname: str                                  = None,
-    acceleration_factor: Union[float, list, None]   = None,
-    also_write_nifti: bool                          = False,
-    do_round: bool                                  = False,
-    decimals: int                                   = 3,
-    added_gaussian_noise: bool                      = False,
-    db_path: str                                    = None,
-    tablename: str                                  = None,
+    volume_processing_func: callable                  = None,
+    output_key: str                                   = "reconstruction",
+    create_dirs_if_needed: bool                       = True,
+    modelname: str                                    = None,
+    avg_acc: Union[float, list, None] = None,
+    also_write_nifti: bool                            = False,
+    do_round: bool                                    = False,
+    decimals: int                                     = 3,
+    added_gaussian_noise: bool                        = False,
+    db_path: str                                      = None,
+    tablename: str                                    = None,
 ) -> None:
     """
     Write outputs for multiple patients to H5 files in a modular fashion.
@@ -336,7 +250,7 @@ def write_output_to_h5(
         If True, create the output directory (and parents) if necessary.
     modelname : str, optional
         Model name to include in filenames and attributes.
-    acceleration_factor : Union[float, list, None], optional
+    avg_acceleration_factor : Union[float, list, None], optional
         Acceleration factor(s) for the reconstruction.
     also_write_nifti : bool, optional
         If True, also write NIfTI files.
@@ -356,8 +270,8 @@ def write_output_to_h5(
     logger.info(f"Number of output items: {len(output)}")
     
     # If acceleration_factor is a list, take the first element.
-    if isinstance(acceleration_factor, list):
-        acceleration_factor = acceleration_factor[0]
+    if isinstance(avg_acc, list):
+        avg_acc = avg_acc[0]
     
     # Process each patient's data.
     for idx, patient_data in enumerate(output):
@@ -371,7 +285,7 @@ def write_output_to_h5(
             patient_data,
             pat_dir,
             modelname,
-            acceleration_factor,
+            avg_acc                 = avg_acc,
             output_key              = output_key,
             volume_processing_func  = volume_processing_func,
             do_round                = do_round,

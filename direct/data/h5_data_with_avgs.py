@@ -47,6 +47,7 @@ class H5WithAvgsSliceData(Dataset):
         compute_mask: bool                                     = False,
         store_applied_acs_mask: bool                           = True,
         avg_collapse_strat: str                                = None,
+        avg_acceleration: int                                  = None,
         add_gaussian_noise: bool                               = False,
         noise_mult: float                                      = 2.5,
         db_path: Optional[str]                                 = None,
@@ -95,6 +96,8 @@ class H5WithAvgsSliceData(Dataset):
             avg3: takes the third average only
             allavg: takes the average of avg1 and avg3 and adds avg2, since avg1 and avg3 measure odd lines and avg2 measures even lines we geta  full kspace
             full_kspace = (avg1 + avg3) / 2 + avg2
+        avg_acceleration: int
+            The acceleration factor when considering the number of averages and the parallel imaging factor. For example can be 6. Then 1 out of 3 averages is measured and the acceleration factor is 2.
         add_gaussian_noise: bool
             Add gaussian noise to the k-space data. Default: False.
         compute_mask: bool
@@ -117,6 +120,7 @@ class H5WithAvgsSliceData(Dataset):
         self.compute_mask                              = compute_mask              # QVL - Compute the mask for the ACS region
         self.store_applied_acs_mask                    = store_applied_acs_mask    # QVL - Store the applied ACS mask in the dataset 
         self.average_collapse_strat                    = avg_collapse_strat        # QVL - Strategy to collapse the averages and remove the average dimension
+        self.avg_acceleration                          = avg_acceleration          # QVL - Acceleration factor when considering the number of averages and the parallel imaging factor. For example can be 6. Then 1 out of 3 averages is measured and the acceleration factor is 2.
         self.add_gaussian_noise                        = add_gaussian_noise        # QVL - Add gaussian noise to the k-space data, now add noise_mult
         self.noise_mult                                = noise_mult                # QVL - Fraction of noise to add to the k-space data
         self.db_path                                   = db_path                   # QVL - Path to the database to use for the uncertainty quantification
@@ -282,7 +286,7 @@ class H5WithAvgsSliceData(Dataset):
 
 
     def get_noise_coil_list_from_db(self, pat_id: str, debug = False) -> np.ndarray:
-        # sorry this is hardcoded for now
+        # sorry this is hardcoded for now (for now = forever)
         db_path = Path("/home1/p290820/repos/Uncertainty-Quantification-Prostate-MRI/databases/master_habrok_20231106_v2.db")
 
         conn = connect(str(db_path))
@@ -295,9 +299,8 @@ class H5WithAvgsSliceData(Dataset):
         # The found noise is a  list of floats as a string, we need to parse it into a numpy array.
         emperical_noise = self.parse_noise_coils_list(noise_coils_list)
 
-        if debug: 
-            print(type(emperical_noise))
-            print(emperical_noise)
+        # if debug: 
+        #     self.logger.info(f"\nemperical_noise = {emperical_noise}")
 
         return emperical_noise
 
@@ -306,7 +309,7 @@ class H5WithAvgsSliceData(Dataset):
         # Scale the baseline noise by the multiplier.
         scaled_sigma = noise_multiplier * empirical_noise
         if debug:
-            self.logger.info(f"Applying increased noise with sigma: {scaled_sigma}")
+            self.logger.info(f"Applying increased emperical noise per coil ... Noise multiplier {self.noise_mult}")
         rng = np.random.default_rng(seed)
 
         # Create a copy to hold the noisy k-space data.
@@ -349,11 +352,9 @@ class H5WithAvgsSliceData(Dataset):
         self.logger.info(f"QVL - coil dimension is the first dimension.")
 
         if self.add_gaussian_noise: # kspace is 3D here, with dimensions (coils, rows, columns)
-            # sigma       = self.compute_noise_sigma(kspace, fraction=self.noise_mult, debug = False)
-            # kspace      = self.apply_gaussian_noise_to_measured_lines(kspace, sigma=sigma, seed=gaussian_id, debug=False)
-            gaussian_id = self.get_gaussian_id(pat_id, debug = True)
-            empri_noise = self.get_noise_coil_list_from_db(pat_id, debug = True)
-            kspace      = self.apply_mult_gaussian_noise_to_measured_lines(kspace=kspace, empirical_noise=empri_noise, noise_multiplier=self.noise_mult, seed=gaussian_id, debug=True)
+            gaussian_id     = self.get_gaussian_id(pat_id, debug = True)
+            empirical_noise = self.get_noise_coil_list_from_db(pat_id, debug = True)
+            kspace          = self.apply_mult_gaussian_noise_to_measured_lines(kspace=kspace, empirical_noise=empirical_noise, noise_multiplier=self.noise_mult, seed=gaussian_id, debug=True)
 
         # TODO: Write a custom collate function which disables batching for certain keys
         sample = {
@@ -383,6 +384,7 @@ class H5WithAvgsSliceData(Dataset):
                 sample[key] = self.pass_dictionaries[key][filename.name]
 
         if self.pass_h5s:
+            self.logger.info(f"QVL - self.pass_h5s = {self.pass_h5s}")
             for key, (h5_key, path) in self.pass_h5s.items():
                 curr_slice, _ = self.get_slice_data(path / filename.name, slice_no, key=h5_key)
                 if key in sample:
@@ -406,22 +408,26 @@ class H5WithAvgsSliceData(Dataset):
         Returns:
             int: The gaussian_id to use.
         """
+        self.logger.info(f"QVL - self.acc_avg = {self.avg_acceleration}")
+
         conn = connect(self.db_path)  # Assumes self.db_path is defined in the class.
         cursor = conn.cursor()
         query = f"""
-            SELECT recon_path, gaussian_id
+            SELECT recon_path, gaussian_id, avg_acceleration
             FROM {self.tablename_uq}
-            WHERE id = ?
+            WHERE id = ? and avg_acceleration = ?
             ORDER BY gaussian_id DESC
             LIMIT 1;
         """
-        cursor.execute(query, (pat_id,))
+        cursor.execute(query, (pat_id, self.avg_acceleration))
         row = cursor.fetchone()
         if row is None:
             conn.close()
             raise ValueError(f"No row found for patient ID: {pat_id}")
         
-        recon_path, gaussian_id = row
+        recon_path, gaussian_id, avg_acceleration = row
+
+        assert avg_acceleration == self.avg_acceleration, f"Expected avg_acceleration {self.avg_acceleration}, but got {avg_acceleration}"
         
         # If recon_path is NULL (None), return the existing gaussian_id; otherwise, increment it.
         result = gaussian_id if recon_path is None else gaussian_id + 1
@@ -601,13 +607,9 @@ class H5WithAvgsSliceData(Dataset):
         # just some logging
         self.logger.info(f"QVL - curr_data.shape = {curr_data.shape}")
         self.logger.info(f"QVL - curr_data.dtype = {curr_data.dtype}")
-        # for key, value in extra_data.items():
-        #     self.logger.info(f"QVL - extra_data[{key}] = {value}")
-        #     if isinstance(value, np.ndarray):
-        #         self.logger.info(f"QVL - extra_data[{key}].shape = {value.shape}")
-        #         self.logger.info(f"QVL - extra_data[{key}].dtype = {value.dtype}")
 
         return curr_data, extra_data
+
 
     def get_num_slices(self, filename):
         num_slices = self.volume_indices[filename].stop - self.volume_indices[filename].start

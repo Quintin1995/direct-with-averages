@@ -124,14 +124,12 @@ def setup_inference_save_to_h5(
         )
 
         # Step 3 - Write the output to disk.
-        acceleration_factor = env.cfg.inference.dataset.transforms.masking.accelerations if hasattr(env.cfg.inference.dataset.transforms.masking, "accelerations") else env.cfg.inference.dataset.avg_acceleration
         modelname = str(env.cfg.model.model_name).split('.')[-1]
-        
         write_output_to_h5(
             output,
             output_directory,
             output_key           = "reconstruction",
-            acceleration_factor  = acceleration_factor,
+            avg_acc              = env.cfg.inference.dataset.avg_acceleration,
             modelname            = modelname,
             also_write_nifti     = True,
             do_round             = False,
