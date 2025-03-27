@@ -131,7 +131,7 @@ def setup_inference_save_to_h5(
             output_key           = "reconstruction",
             avg_acc              = env.cfg.inference.dataset.avg_acceleration,
             modelname            = modelname,
-            also_write_nifti     = True,
+            also_write_nifti     = False,
             do_round             = False,
             added_gaussian_noise = env.cfg.inference.dataset.add_gaussian_noise,
             db_path              = env.cfg.inference.dataset.db_path,

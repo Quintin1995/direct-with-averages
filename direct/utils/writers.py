@@ -191,7 +191,6 @@ def process_patient_output(
         volume_np = round_volume(volume_np, decimals)
         target_np = round_volume(target_np, decimals) if target_np is not None else None
 
-    # Save as NIfTI if requested
     if also_write_nifti:
         # 1 - Write the reconstruction
         fname_recon = pat_dir / f"{modelname}_R{int(avg_acc)}_recon_gaus{gaussian_id}.nii.gz"
@@ -205,14 +204,12 @@ def process_patient_output(
             fname_mask = pat_dir / f"{modelname}_R{int(avg_acc)}_mask.nii.gz"
             write_numpy_to_nifti(samp_mask_np, fname_mask)
     
-    # Write the output to an H5 file
+    # H5 Writing
     h5_path = pat_dir / filename
     with h5py.File(h5_path, "w") as f:
         f.create_dataset(output_key, data=volume_np)
-        if target_np is not None:
-            f.create_dataset("target", data=target_np)
-        if samp_mask_np is not None:
-            f.create_dataset("mask", data=samp_mask_np)
+        f.create_dataset("target", data=target_np) if target_np is not None else None
+        f.create_dataset("mask", data=samp_mask_np) if samp_mask_np is not None else None
         f.attrs["acceleration_factor"] = avg_acc
         f.attrs["modelname"] = modelname
     logger.info(f"Wrote H5 file: {h5_path}")
