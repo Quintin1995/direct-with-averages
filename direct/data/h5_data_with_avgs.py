@@ -150,6 +150,8 @@ class H5WithAvgsSliceData(Dataset):
         self.logger.info(f"Extra QvL settings: echo_train_acceleration (int): {self.echo_train_acceleration}")
         self.logger.info(f"Extra QvL settings: echo_train_fold_idx (int): {self.echo_train_fold_idx}")
 
+        assert not (self.do_lxo_for_uq and self.add_gaussian_noise), "do_lxo_for_uq and add_gaussian_noise are not compatible. Please set one of them to False."
+
         if True:
             # If filenames_filter and filenames_lists are given, it will load files in filenames_filter
             # and filenames_lists will be ignored.
@@ -428,7 +430,7 @@ class H5WithAvgsSliceData(Dataset):
         """
         Select which echo train(s) to drop for a given fold.
 
-        For acc=1: disjoint pairs (excluding center ET).
+        For acc=1: adjecent pairs (excluding center ET).
         For acc>1: single leave-one-out drop from retained ETs (excluding center ET).
 
         Parameters
@@ -446,7 +448,7 @@ class H5WithAvgsSliceData(Dataset):
             Echo train indices to drop for this fold.
         """
         if self.echo_train_acceleration == 1:
-            # Disjoint dropout pairs
+            # Adjecent dropout pairs
             pairs = []
             i = 0
             while i < len(retained_ets) - 1:
@@ -458,7 +460,7 @@ class H5WithAvgsSliceData(Dataset):
                 i += 2
             if not pairs:
                 raise ValueError("No valid echo-train dropout pairs (acc=1) excluding center ET.")
-            self.logger(f"Disjoint dropout pairs: {pairs}")
+            self.logger(f"Adjecent dropout pairs: {pairs}")
             return pairs[fold_idx % len(pairs)]
         else:
             # Leave-one-out dropout
@@ -494,6 +496,9 @@ class H5WithAvgsSliceData(Dataset):
             if row["echo_train_idx"] in ets_to_drop:
                 cols = list(map(int, row["col_indexes"].split(",")))
                 col_mask[cols] = False
+
+        if not np.any(col_mask):
+            raise RuntimeError("All columns masked out — this would zero all k-space.")
 
         return col_mask
 

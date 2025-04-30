@@ -115,120 +115,242 @@ def get_gaussian_id(
     return new_gaussian_id
 
 
+# def process_patient_output(
+#     patient_data: tuple,
+#     pat_dir: pathlib.Path,
+#     modelname: str,
+#     avg_acc: float    = None,
+#     output_key: str                   = "reconstruction",
+#     volume_processing_func: callable  = None,
+#     do_round: bool                    = False,
+#     decimals: int                     = 3,
+#     also_write_nifti: bool            = False,
+#     added_gaussian_noise: bool        = False,
+#     db_path: str                      = None,
+#     tablename: str                    = None,
+#     do_lxo_for_uq: bool               = None,
+#     echo_train_fold_idx: int          = None,
+#     echo_train_acceleration: int      = None,
+# ) -> None:
+#     """
+#     Process and write output for a single patient.
+    
+#     patient_data is expected to be a tuple:
+#       (volume, target, _, filename, samp_mask, pat_id)
+#     where volume is a torch tensor with shape [slices, 1, height, width].
+#     """
+#     assert avg_acc is not None, "avg_acceleration_factor must be provided."
+#     assert modelname is not None, "modelname must be provided."
+#     assert db_path is not None, "db_path must be provided."
+#     assert tablename is not None, "tablename must be provided."
+
+#     volume, target, _, filename, samp_mask, pat_id = patient_data
+
+#     if True:
+#         print(f"Writer - Shape of the volume: {volume.shape}")
+#         print(f"Writer - Shape of the target: {target.shape}") if target is not None else None
+#         print(f"Writer - The filename is: {filename}")
+#         print(f"Writer - The patient ID is: {pat_id}")
+#         print(f"Writer - Type patient id: {type(pat_id)}")
+#         print(f"Writer - The avg_acceleration_factor is: {avg_acc}")
+#         print(f"Writer - The modelname is: {modelname}")
+#         print(f"Writer - The output_key is: {output_key}")
+#         print(f"Writer - The volume_processing_func is: {volume_processing_func}")
+#         print(f"Writer - The do_round is: {do_round}")
+#         print(f"Writer - The decimals is: {decimals}")
+#         print(f"Writer - The also_write_nifti is: {also_write_nifti}")
+#         print(f"Writer - The added_gaussian_noise is: {added_gaussian_noise}")
+#         print(f"Writer - The db_path is: {db_path}")
+#         print(f"Writer - The tablename is: {tablename}")
+#         print(f"Writer - The do_lxo_for_uq is: {do_lxo_for_uq}")
+#         print(f"Writer - The echo_train_fold_idx is: {echo_train_fold_idx}")
+#         print(f"Writer - The echo_train_acceleration is: {echo_train_acceleration}")
+
+#     # here we connect with the database and see if what the gaussian noise index should be for this patient and update the database with a new row, so that the next time it will be updated with a new index
+#     if added_gaussian_noise:
+#         gaussian_id = get_gaussian_id(
+#             pat_id    = str(pat_id),
+#             db_path   = db_path,
+#             tablename = tablename,
+#             filename  = pat_dir / filename,
+#             avg_acc   = avg_acc,
+#             debug     = True)
+#         # Modify filename with fnamepart if provided
+#         if isinstance(filename, pathlib.PosixPath):
+#             filename = filename.name
+#         filename = filename.replace(".h5", f"_gaus{gaussian_id}.h5")
+#     else:
+#         gaussian_id = ""
+
+#     # Convert torch tensors to numpy arrays
+#     if volume is not None:
+#         volume_np = volume.cpu().numpy()[:, 0, ...].astype(np.float32)
+#     else:
+#         volume_np = None
+
+#     if target is not None:
+#         target_np = target.cpu().numpy()[:, 0, ...].astype(np.float32)
+#     else:
+#         target_np = None
+
+#     if samp_mask is not None:
+#         samp_mask_np = samp_mask.cpu().numpy()[:, 0, ...].astype(np.float32)
+#     else:
+#         samp_mask_np = None
+
+#     # Optionally process volume
+#     if volume_processing_func is not None:
+#         volume_np = volume_processing_func(volume_np)
+
+#     # Optionally round volume
+#     if do_round:
+#         volume_np = round_volume(volume_np, decimals)
+#         target_np = round_volume(target_np, decimals) if target_np is not None else None
+
+#     if also_write_nifti:
+#         # 1 - Write the reconstruction
+#         fname_recon = pat_dir / f"{modelname}_R{int(avg_acc)}_recon_gaus{gaussian_id}.nii.gz"
+#         write_numpy_to_nifti(volume_np, fname_recon)
+#         # 2 - Write the target
+#         if target_np is not None:
+#             fname_target = pat_dir / f"{modelname}_R{int(avg_acc)}_target.nii.gz"
+#             write_numpy_to_nifti(target_np, fname_target)
+#         # 3 - Write the sampling mask
+#         if samp_mask_np is not None:
+#             fname_mask = pat_dir / f"{modelname}_R{int(avg_acc)}_mask.nii.gz"
+#             write_numpy_to_nifti(samp_mask_np, fname_mask)
+    
+#     # H5 Writing
+#     h5_path = pat_dir / filename
+#     with h5py.File(h5_path, "w") as f:
+#         f.create_dataset(output_key, data=volume_np)
+#         f.create_dataset("target", data=target_np) if target_np is not None else None
+#         f.create_dataset("mask", data=samp_mask_np) if samp_mask_np is not None else None
+#         f.attrs["acceleration_factor"] = avg_acc
+#         f.attrs["modelname"] = modelname
+        
+#         if do_lxo_for_uq:
+#             f.attrs["do_lxo_for_uq"] = True
+#             f.attrs["echo_train_fold_idx"] = echo_train_fold_idx
+#             f.attrs["echo_train_acceleration"] = echo_train_acceleration
+
+#     logger.info(f"Wrote H5 file: {h5_path}")
+
+
 def process_patient_output(
     patient_data: tuple,
     pat_dir: pathlib.Path,
     modelname: str,
-    avg_acc: float    = None,
-    output_key: str                   = "reconstruction",
-    volume_processing_func: callable  = None,
-    do_round: bool                    = False,
-    decimals: int                     = 3,
-    also_write_nifti: bool            = False,
-    added_gaussian_noise: bool        = False,
-    db_path: str                      = None,
-    tablename: str                    = None,
+    avg_acc: float = None,
+    output_key: str = "reconstruction",
+    volume_processing_func: callable = None,
+    do_round: bool = False,
+    decimals: int = 3,
+    also_write_nifti: bool = False,
+    added_gaussian_noise: bool = False,
+    db_path: str = None,
+    tablename: str = None,
+    do_lxo_for_uq: bool = None,
+    echo_train_fold_idx: int = None,
+    echo_train_acceleration: int = None,
 ) -> None:
     """
     Process and write output for a single patient.
-    
     patient_data is expected to be a tuple:
-      (volume, target, _, filename, samp_mask, pat_id)
-    where volume is a torch tensor with shape [slices, 1, height, width].
+    (volume, target, _, filename, samp_mask, pat_id)
     """
     assert avg_acc is not None, "avg_acceleration_factor must be provided."
     assert modelname is not None, "modelname must be provided."
     assert db_path is not None, "db_path must be provided."
     assert tablename is not None, "tablename must be provided."
+    assert not (do_lxo_for_uq and added_gaussian_noise), \
+        "Cannot apply both echo-train dropout and Gaussian noise simultaneously."
 
     volume, target, _, filename, samp_mask, pat_id = patient_data
 
-    print(f"Writer - Shape of the volume: {volume.shape}")
-    print(f"Writer - Shape of the target: {target.shape}") if target is not None else None
-    print(f"Writer - The filename is: {filename}")
-    print(f"Writer - The patient ID is: {pat_id}")
-    print(f"Writer - Type patient id: {type(pat_id)}")
-    print(f"Writer - The avg_acceleration_factor is: {avg_acc}") 
+    if isinstance(filename, pathlib.Path):
+        filename = filename.name
+    base_filename = filename.replace(".h5", "")
 
-    # here we connect with the database and see if what the gaussian noise index should be for this patient and update the database with a new row, so that the next time it will be updated with a new index
-    if added_gaussian_noise:
+    if do_lxo_for_uq:
+        filename = f"{base_filename}_R{echo_train_acceleration}_fold{echo_train_fold_idx}.h5"
+        gaussian_id = ""
+    elif added_gaussian_noise:
         gaussian_id = get_gaussian_id(
-            pat_id    = str(pat_id),
-            db_path   = db_path,
-            tablename = tablename,
-            filename  = pat_dir / filename,
-            avg_acc   = avg_acc,
-            debug     = True)
-        # Modify filename with fnamepart if provided
-        if isinstance(filename, pathlib.PosixPath):
-            filename = filename.name
-        filename = filename.replace(".h5", f"_gaus{gaussian_id}.h5")
+            pat_id=str(pat_id),
+            db_path=db_path,
+            tablename=tablename,
+            filename=pat_dir / filename,
+            avg_acc=avg_acc,
+            debug=True
+        )
+        filename = f"{base_filename}_gaus{gaussian_id}.h5"
     else:
+        filename = f"{base_filename}.h5"
         gaussian_id = ""
 
     # Convert torch tensors to numpy arrays
-    if volume is not None:
-        volume_np = volume.cpu().numpy()[:, 0, ...].astype(np.float32)
-    else:
-        volume_np = None
+    volume_np = volume.cpu().numpy()[:, 0, ...].astype(np.float32) if volume is not None else None
+    target_np = target.cpu().numpy()[:, 0, ...].astype(np.float32) if target is not None else None
+    samp_mask_np = samp_mask.cpu().numpy()[:, 0, ...].astype(np.float32) if samp_mask is not None else None
 
-    if target is not None:
-        target_np = target.cpu().numpy()[:, 0, ...].astype(np.float32)
-    else:
-        target_np = None
-
-    if samp_mask is not None:
-        samp_mask_np = samp_mask.cpu().numpy()[:, 0, ...].astype(np.float32)
-    else:
-        samp_mask_np = None
-
-    # Optionally process volume
     if volume_processing_func is not None:
         volume_np = volume_processing_func(volume_np)
 
-    # Optionally round volume
     if do_round:
         volume_np = round_volume(volume_np, decimals)
-        target_np = round_volume(target_np, decimals) if target_np is not None else None
+        if target_np is not None:
+            target_np = round_volume(target_np, decimals)
 
     if also_write_nifti:
-        # 1 - Write the reconstruction
-        fname_recon = pat_dir / f"{modelname}_R{int(avg_acc)}_recon_gaus{gaussian_id}.nii.gz"
-        write_numpy_to_nifti(volume_np, fname_recon)
-        # 2 - Write the target
+        suffix = f"_R{int(avg_acc)}"
+        if do_lxo_for_uq:
+            suffix += f"_fold{echo_train_fold_idx}"
+        elif added_gaussian_noise:
+            suffix += f"_gaus{gaussian_id}"
+
+        write_numpy_to_nifti(volume_np, pat_dir / f"{modelname}{suffix}_recon.nii.gz")
         if target_np is not None:
-            fname_target = pat_dir / f"{modelname}_R{int(avg_acc)}_target.nii.gz"
-            write_numpy_to_nifti(target_np, fname_target)
-        # 3 - Write the sampling mask
+            write_numpy_to_nifti(target_np, pat_dir / f"{modelname}{suffix}_target.nii.gz")
         if samp_mask_np is not None:
-            fname_mask = pat_dir / f"{modelname}_R{int(avg_acc)}_mask.nii.gz"
-            write_numpy_to_nifti(samp_mask_np, fname_mask)
-    
-    # H5 Writing
+            write_numpy_to_nifti(samp_mask_np, pat_dir / f"{modelname}{suffix}_mask.nii.gz")
+
     h5_path = pat_dir / filename
     with h5py.File(h5_path, "w") as f:
         f.create_dataset(output_key, data=volume_np)
-        f.create_dataset("target", data=target_np) if target_np is not None else None
-        f.create_dataset("mask", data=samp_mask_np) if samp_mask_np is not None else None
+        if target_np is not None:
+            f.create_dataset("target", data=target_np)
+        if samp_mask_np is not None:
+            f.create_dataset("mask", data=samp_mask_np)
         f.attrs["acceleration_factor"] = avg_acc
         f.attrs["modelname"] = modelname
+
+        if do_lxo_for_uq:
+            f.attrs["do_lxo_for_uq"] = True
+            f.attrs["echo_train_fold_idx"] = echo_train_fold_idx
+            f.attrs["echo_train_acceleration"] = echo_train_acceleration
+
     logger.info(f"Wrote H5 file: {h5_path}")
+
 
 
 def write_output_to_h5(
     output: list,
     output_directory: pathlib.Path,
-    volume_processing_func: callable                  = None,
-    output_key: str                                   = "reconstruction",
-    create_dirs_if_needed: bool                       = True,
-    modelname: str                                    = None,
-    avg_acc: Union[float, list, None] = None,
-    also_write_nifti: bool                            = False,
-    do_round: bool                                    = False,
-    decimals: int                                     = 3,
-    added_gaussian_noise: bool                        = False,
-    db_path: str                                      = None,
-    tablename: str                                    = None,
+    volume_processing_func: callable   = None,
+    output_key: str                    = "reconstruction",
+    create_dirs_if_needed: bool        = True,
+    modelname: str                     = None,
+    avg_acc: Union[float, list, None]  = None,
+    also_write_nifti: bool             = False,
+    do_round: bool                     = False,
+    decimals: int                      = 3,
+    added_gaussian_noise: bool         = False,
+    db_path: str                       = None,
+    tablename: str                     = None,
+    do_lxo_for_uq: bool                = None,
+    echo_train_fold_idx: int           = None,
+    echo_train_acceleration: int       = None,
 ) -> None:
     """
     Write outputs for multiple patients to H5 files in a modular fashion.
@@ -291,6 +413,9 @@ def write_output_to_h5(
             added_gaussian_noise    = added_gaussian_noise,
             db_path                 = db_path,
             tablename               = tablename,
+            do_lxo_for_uq           = do_lxo_for_uq,
+            echo_train_fold_idx     = echo_train_fold_idx,
+            echo_train_acceleration = echo_train_acceleration,
         )
 
 

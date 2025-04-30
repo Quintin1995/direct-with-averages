@@ -128,14 +128,17 @@ def setup_inference_save_to_h5(
         write_output_to_h5(
             output,
             output_directory,
-            output_key           = "reconstruction",
-            avg_acc              = env.cfg.inference.dataset.avg_acceleration,
-            modelname            = modelname,
-            also_write_nifti     = False,
-            do_round             = False,
-            added_gaussian_noise = env.cfg.inference.dataset.add_gaussian_noise,
-            db_path              = env.cfg.inference.dataset.db_path,
-            tablename            = env.cfg.inference.dataset.tablename,
+            output_key               = "reconstruction",
+            avg_acc                  = env.cfg.inference.dataset.avg_acceleration,
+            modelname                = modelname,
+            also_write_nifti         = False,
+            do_round                 = False,
+            added_gaussian_noise     = env.cfg.inference.dataset.add_gaussian_noise,
+            db_path                  = env.cfg.inference.dataset.db_path,
+            tablename                = env.cfg.inference.dataset.tablename,
+            do_lxo_for_uq            = env.cfg.inference.dataset.do_lxo_for_uq,
+            echo_train_fold_idx      = env.cfg.inference.dataset.echo_train_fold_idx,
+            echo_train_acceleration  = env.cfg.inference.dataset.echo_train_acceleration,
         )
 
 
