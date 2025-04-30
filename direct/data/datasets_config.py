@@ -102,15 +102,18 @@ class FastMRIConfig(H5SliceConfig):
 
 
 @dataclass
-class FastMRIAvgCombConfig(H5SliceConfig):      # The configuration for the FastMRI dataset with added averages
-    pass_attrs: bool = True
-    avg_acceleration: float = 1.0                   # the acceleration as string based on leaving out averages with added equispaced acceleration symbolising the application of a GRAPPA factor for example
-    echo_train_length: Optional[int] = 25           # The echo train length of the data, typically 25
-    leave_out_echo_trains: Optional[int] = 2        # The number of echo trains to leave out for leave-X-out uncertainty quantification
-    add_gaussian_noise: Optional[bool] = False      # Add Gaussian noise to the data
-    noise_mult: Optional[float] = 2.5               # The fraction of noise to add to the data, determined empirically based on the max of the data
-    db_path: Optional[str] = None                   # The path to the database to use for the uncertainty quantification
-    tablename: Optional[str] = "patients_uq"        # The tablename to use for the uncertainty quantification
+class FastMRIAvgCombConfig(H5SliceConfig):              # The configuration for the FastMRI dataset with added averages
+    pass_attrs: bool                   = True
+    avg_acceleration: float            = 1.0            # the acceleration as string based on leaving out averages with added equispaced acceleration symbolising the application of a GRAPPA factor for example
+    echo_train_length: Optional[int]   = 25             # The echo train length of the data, typically 25
+    add_gaussian_noise: Optional[bool] = False          # Add Gaussian noise to the data
+    noise_mult: Optional[float]        = 2.5            # The fraction of noise to add to the data, determined empirically based on the max of the data
+    db_path: Optional[str]             = None           # The path to the database to use for the uncertainty quantification
+    tablename: Optional[str]           = "patients_uq"  # The tablename to use for the uncertainty quantification`
+    do_lxo_for_uq: bool                = True           # If True, apply fold_idx dropout for Uncertainty Quantification
+    echo_train_acceleration: int       = 1              # Acceleration factor; 1 means no acceleration by means of droping out a factor of the echo train length
+    echo_train_fold_idx: int           = 0              # Index of ET(s) to leave out from retained set
+    # leave_out_echo_trains: Optional[int] = 2          # The number of echo trains to leave out for leave-X-out uncertainty quantification
     
 
 @dataclass

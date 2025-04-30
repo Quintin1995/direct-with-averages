@@ -4,8 +4,10 @@ import logging
 import pathlib
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
-from sqlite3 import connect
+import sqlite3
+
 from pathlib import Path
+import pandas as pd
 
 import h5py
 import numpy as np
@@ -52,6 +54,9 @@ class H5WithAvgsSliceData(Dataset):
         noise_mult: float                                      = 2.5,
         db_path: Optional[str]                                 = None,
         tablename: Optional[str]                               = None,
+        do_lxo_for_uq: bool                                    = False,         # If True, apply fold_idx dropout for Uncertainty Quantification
+        echo_train_acceleration: int                           = 1,            # Acceleration factor; 1 means no acceleration
+        echo_train_fold_idx: int                               = 0,            # Index of ET(s) to leave out from retained set
     ) -> None:
         """Initialize the dataset.
 
@@ -117,77 +122,85 @@ class H5WithAvgsSliceData(Dataset):
         self.metadata                                  = metadata
         self.dataset_description                       = dataset_description
         self.text_description                          = text_description
-        self.compute_mask                              = compute_mask              # QVL - Compute the mask for the ACS region
-        self.store_applied_acs_mask                    = store_applied_acs_mask    # QVL - Store the applied ACS mask in the dataset 
-        self.average_collapse_strat                    = avg_collapse_strat        # QVL - Strategy to collapse the averages and remove the average dimension
-        self.avg_acceleration                          = avg_acceleration          # QVL - Acceleration factor when considering the number of averages and the parallel imaging factor. For example can be 6. Then 1 out of 3 averages is measured and the acceleration factor is 2.
-        self.add_gaussian_noise                        = add_gaussian_noise        # QVL - Add gaussian noise to the k-space data, now add noise_mult
-        self.noise_mult                                = noise_mult                # QVL - Fraction of noise to add to the k-space data
-        self.db_path                                   = db_path                   # QVL - Path to the database to use for the uncertainty quantification
-        self.tablename_uq                              = tablename                 # QVL - The tablename to use for the uncertainty quantification
-        self.tablename_noise                           = "noise_estimation"        # QVL - Table in the DB where the noise levels for each patient for each coil are stored.
         self.data: List[Tuple]                         = []
         self.volume_indices: Dict[pathlib.Path, range] = {}
+
+        # QVL Class specific parameters
+        self.compute_mask                              = compute_mask              # collapse avg - Compute the mask for the ACS region
+        self.store_applied_acs_mask                    = store_applied_acs_mask    # collapse avg - Store the applied ACS mask in the dataset 
+        self.average_collapse_strat                    = avg_collapse_strat        # collapse avg - Strategy to collapse the averages and remove the average dimension
+        self.avg_acceleration                          = avg_acceleration          # collapse avg - Acceleration factor when considering the number of averages and the parallel imaging factor. For example can be 6. Then 1 out of 3 averages is measured and the acceleration factor is 2.
+        self.add_gaussian_noise                        = add_gaussian_noise        # Gaus - Add gaussian noise to the k-space data, now add noise_mult
+        self.noise_mult                                = noise_mult                # Gaus - Fraction of noise to add to the k-space data
+        self.db_path                                   = db_path                   # Gaus - Path to the database to use for the uncertainty quantification
+        self.tablename_uq                              = tablename                 # Gaus - The tablename to use for the uncertainty quantification
+        self.tablename_noise                           = "noise_estimation"        # Gaus - Table in the DB where the noise levels for each patient for each coil are stored.
+        self.do_lxo_for_uq                             = do_lxo_for_uq             # LXO - If True, apply fold_idx dropout for Uncertainty Quantification
+        self.echo_train_acceleration                   = echo_train_acceleration   # LXO - Acceleration factor when dropping a factor of the echo trains per average. 2 means that 1/2 echo trains are dropped entirely (masked out)
+        self.echo_train_fold_idx                       = echo_train_fold_idx       # LXO - Index of ET(s) to leave out from retained set
+        self.et_mapping_tablename                      = "echo_train_mapping"  # Table in the DB where the echo train mapping for each patient for each coil are stored.
+        self.db_path = Path("/home1/p290820/repos/Uncertainty-Quantification-Prostate-MRI/databases/master_habrok_20231106_v2.db")   # sorry this is hardcoded for now
 
         self.logger.info(f"Extra QvL settings: compute_mask (bool): {self.compute_mask}")
         self.logger.info(f"Extra QvL settings: store_applied_acs_mask (bool): {self.store_applied_acs_mask}")
         self.logger.info(f"Extra QvL settings: average_collapse_strat (str): {self.average_collapse_strat}")
         self.logger.info(f"Extra QvL settings: add_gaussian_noise (bool): {self.add_gaussian_noise}")
-        self.logger.info(f"Extra QvL settings: noise_mult (float): {self.noise_mult}")
-        self.logger.info(f"Kspace context: {kspace_context}. If 0 it means we only consider the corrent slice. if not we consider the slices around the slice.")   
-        self.logger.info(f"Database path: {self.db_path}")
-        self.logger.info(f"Table name Uncertainty Quantification: {self.tablename_uq}")
+        self.logger.info(f"Kspace context: {kspace_context}. If 0 it means we only consider the corrent slice. if not we consider the slices around the slice.")
+        self.logger.info(f"Extra QvL settings: do_lxo_for_uq (bool): {self.do_lxo_for_uq}")
+        self.logger.info(f"Extra QvL settings: echo_train_acceleration (int): {self.echo_train_acceleration}")
+        self.logger.info(f"Extra QvL settings: echo_train_fold_idx (int): {self.echo_train_fold_idx}")
 
-        # If filenames_filter and filenames_lists are given, it will load files in filenames_filter
-        # and filenames_lists will be ignored.
-        if filenames_filter is None:
-            if filenames_lists is not None:
-                if filenames_lists_root is None:
-                    e = "`filenames_lists` is passed but `filenames_lists_root` is None."
-                    self.logger.error(e)
-                    raise ValueError(e)
-                filenames = get_filenames_for_datasets(
-                    lists=filenames_lists, files_root=filenames_lists_root, data_root=root
-                )
-                self.logger.info("Attempting to load %s filenames from list(s).", len(filenames))
+        if True:
+            # If filenames_filter and filenames_lists are given, it will load files in filenames_filter
+            # and filenames_lists will be ignored.
+            if filenames_filter is None:
+                if filenames_lists is not None:
+                    if filenames_lists_root is None:
+                        e = "`filenames_lists` is passed but `filenames_lists_root` is None."
+                        self.logger.error(e)
+                        raise ValueError(e)
+                    filenames = get_filenames_for_datasets(
+                        lists=filenames_lists, files_root=filenames_lists_root, data_root=root
+                    )
+                    self.logger.info("Attempting to load %s filenames from list(s).", len(filenames))
+                else:
+                    self.logger.info("Parsing directory %s for h5 files.", self.root)
+                    filenames = list(self.root.glob("*.h5"))
             else:
-                self.logger.info("Parsing directory %s for h5 files.", self.root)
-                filenames = list(self.root.glob("*.h5"))
-        else:
-            self.logger.info("Attempting to load %s filenames.", len(filenames_filter))
-            filenames = filenames_filter
+                self.logger.info("Attempting to load %s filenames.", len(filenames_filter))
+                filenames = filenames_filter
 
-        filenames = [pathlib.Path(_) for _ in filenames]
+            filenames = [pathlib.Path(_) for _ in filenames]
 
-        if regex_filter:
-            filenames = [_ for _ in filenames if re.match(regex_filter, str(_))]
+            if regex_filter:
+                filenames = [_ for _ in filenames if re.match(regex_filter, str(_))]
 
-        if len(filenames) == 0:
-            warn = (
-                f"Found 0 h5 files in directory {self.root}."
-                if not self.text_description
-                else f"Found 0 h5 files in directory {self.root} for dataset {self.text_description}."
-            )
-            self.logger.warning(warn)
-        else:
-            self.logger.info("Using %s h5 files in %s.", len(filenames), self.root)
+            if len(filenames) == 0:
+                warn = (
+                    f"Found 0 h5 files in directory {self.root}."
+                    if not self.text_description
+                    else f"Found 0 h5 files in directory {self.root} for dataset {self.text_description}."
+                )
+                self.logger.warning(warn)
+            else:
+                self.logger.info("Using %s h5 files in %s.", len(filenames), self.root)
 
-        self.sensitivity_maps = cast_as_path(sensitivity_maps)
+            self.sensitivity_maps = cast_as_path(sensitivity_maps)
 
-        self.parse_filenames_data(
-            filenames, extra_h5s=pass_h5s, filter_slice=slice_data
-        )  # Collect information on the image masks_dict.
-        self.pass_h5s = pass_h5s
+            self.parse_filenames_data(
+                filenames, extra_h5s=pass_h5s, filter_slice=slice_data
+            )  # Collect information on the image masks_dict.
+            self.pass_h5s = pass_h5s
 
-        self.pass_attrs = pass_attrs
-        self.extra_keys = extra_keys
-        self.pass_dictionaries = pass_dictionaries
+            self.pass_attrs = pass_attrs
+            self.extra_keys = extra_keys
+            self.pass_dictionaries = pass_dictionaries
 
-        self.kspace_context = kspace_context if kspace_context else 0
-        self.ndim = 2 if self.kspace_context == 0 else 3
+            self.kspace_context = kspace_context if kspace_context else 0
+            self.ndim = 2 if self.kspace_context == 0 else 3
 
-        if self.text_description:
-            self.logger.info("Dataset description: %s.", self.text_description)
+            if self.text_description:
+                self.logger.info("Dataset description: %s.", self.text_description)
 
 
     def parse_filenames_data(self, filenames, extra_h5s=None, filter_slice=None):
@@ -269,65 +282,263 @@ class H5WithAvgsSliceData(Dataset):
         return len(self.data)
 
 
-    # lets make a parser that parses the string with , 2.189615383451e-06 as a float list into an np.float array
-    def parse_noise_coils_list(self, noise_coils_list: str) -> np.ndarray:
+    def _fetch_et_summary(self, pat_id: str, slice_idx: int, avg_idx=0) -> pd.DataFrame:
         """
-        Parse the noise_coils_list string into a numpy array of floats.
-        
-        Args:
-            noise_coils_list (str): Comma-separated string of floats.
-        
-        Returns:
-            np.ndarray: Array of floats.
+        Fetch per‑echo‑train column‑index summaries for a given patient & slice.
+
+        Parameters
+        ----------
+        patient_id : str
+            The seq_id of the patient.
+        db_path : str or Path
+            Path to the SQLite database file.
+        table_name : str
+            Name of the table containing acquisitions.
+        slice_index : int, default=0
+            Which slice to filter on (usually 0 for mapping).
+        debug : bool, default=False
+            If True, prints the resulting DataFrame.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: ['id','avg_idx','echo_train_idx','col_indexes','sample_count'].
+            - col_indexes is a comma‑separated string of the sampled column indices.
+            - sample_count should equal the echo‑train length (e.g. 25).
+
+        Raises
+        ------
+        ValueError
+            If no rows are returned for the given patient & slice.
+        RuntimeError
+            On any database I/O error.
         """
-        # Split the string by commas and convert each element to a float.
-        noise_list = [float(val) for val in noise_coils_list.split(',')]
-        return np.array(noise_list)
+        db_file = str(self.db_path)
+        sql = f"""
+        SELECT
+            id,
+            avg_idx,
+            echo_train_idx,
+            GROUP_CONCAT(col_idx, ',') AS col_indexes,
+            COUNT(col_idx)             AS sample_count
+        FROM {self.et_mapping_tablename}
+        WHERE 
+            id = ?
+            AND avg_idx = ?
+            AND slice_idx = ?
+        GROUP BY avg_idx, echo_train_idx
+        ORDER BY avg_idx, echo_train_idx
+        ;
+        """
+        try:
+            with sqlite3.connect(db_file) as conn:
+                df = pd.read_sql_query(sql, conn, params=(pat_id, avg_idx, slice_idx))
+        except sqlite3.Error as e:
+            raise RuntimeError(f"Unable to query echo‑train mapping: {e}")
+
+        if df.empty:
+            raise ValueError(
+                f"No echo‑train summary found for patient={pat_id!r}, slice_idx={slice_idx}"
+            )
+
+        self.logger(f"Echo‑train summary for {pat_id!r}, slice {slice_idx}:\n", df)
+
+        return df
 
 
-    def get_noise_coil_list_from_db(self, pat_id: str, debug = False) -> np.ndarray:
-        # sorry this is hardcoded for now (for now = forever)
-        db_path = Path("/home1/p290820/repos/Uncertainty-Quantification-Prostate-MRI/databases/master_habrok_20231106_v2.db")
-
-        conn = connect(str(db_path))
-        c = conn.cursor()
-        query = "SELECT * FROM noise_estimation WHERE id = ?"
-        c.execute(query, (pat_id.strip(),))
-        _, _, _, _, noise_coils_list, _, _ = c.fetchone()
-        conn.close()
-
-        # The found noise is a  list of floats as a string, we need to parse it into a numpy array.
-        emperical_noise = self.parse_noise_coils_list(noise_coils_list)
-
-        # if debug: 
-        #     self.logger.info(f"\nemperical_noise = {emperical_noise}")
-
-        return emperical_noise
+    def _count_et(self, summary_df: pd.DataFrame) -> int:
+        """Return the number of distinct echo trains in the summary DataFrame."""
+        self.logger(f"Counting echo trains in summary DataFrame:\n{summary_df}")
+        return summary_df["echo_train_idx"].nunique()
 
 
-    def apply_mult_gaussian_noise_to_measured_lines(self, kspace: np.ndarray, empirical_noise: np.ndarray, noise_multiplier: float, seed: int = None, debug=False) -> np.ndarray:
-        # Scale the baseline noise by the multiplier.
-        scaled_sigma = noise_multiplier * empirical_noise
-        if debug:
-            self.logger.info(f"Applying increased emperical noise per coil ... Noise multiplier {self.noise_mult}")
-        rng = np.random.default_rng(seed)
+    def _find_center_et(self, ncols: int, summary_df: pd.DataFrame) -> int:
+        """
+        Find which echo‑train contains the center k-space column.
 
-        # Create a copy to hold the noisy k-space data.
-        noisy_kspace = kspace.copy()
-        coils, rows, cols = kspace.shape
+        Parameters
+        ----------
+        ncols : int
+            Total number of k‑space columns.
+        summary_df : pd.DataFrame
+            Output of _fetch_et_summary() with 'col_indexes' per echo train.
 
-        for c in range(coils):
-            coil_data = noisy_kspace[c].copy()  # shape: (rows, cols)
-            # Find indices where the coil has measured (nonzero) data.
-            mask = np.nonzero(np.abs(coil_data) > 0)
-            if mask[0].size > 0:
-                n_measured = mask[0].size
-                # Generate complex Gaussian noise for these measured entries,
-                # scaled by the increased sigma for the current coil.
-                coil_data[mask] += scaled_sigma[c] * (rng.standard_normal(n_measured) + 1j * rng.standard_normal(n_measured))
-            noisy_kspace[c] = coil_data
+        Returns
+        -------
+        int
+            Echo-train index containing the center column.
 
-        return noisy_kspace
+        Raises
+        ------
+        ValueError
+            If no echo train contains the center column.
+        """
+        middle_col = ncols // 2
+        self.logger(f"Center column index is {middle_col}")
+        
+        for _, row in summary_df.iterrows():
+            cols = list(map(int, row["col_indexes"].split(",")))
+            if middle_col in cols:
+                self.logger(f"Found center column in echo train {row['echo_train_idx']}")
+                return int(row["echo_train_idx"])
+
+        raise ValueError(f"No echo train found containing center column {middle_col}")
+
+
+    def _select_retained_ets(self, total_ets: int, center_et: int, acc: int) -> List[int]:
+        """
+        Select a centered block of echo trains to retain, protecting the center ET.
+
+        Parameters
+        ----------
+        total_ets : int
+            Total number of echo trains.
+        center_et : int
+            The index of the echo train containing the center column.
+        acc : int
+            Acceleration factor.
+
+        Returns
+        -------
+        List[int]
+            List of retained echo-train indices.
+        """
+        if acc == 1:
+            return list(range(total_ets))
+
+        n_keep = (total_ets + 1) // acc
+        half = n_keep // 2
+        self.logger(f"Retaining {n_keep} echo trains centered around {center_et} with half: {half}.")
+
+        start = max(0, center_et - half)
+        end = start + n_keep
+        if end > total_ets:
+            start = max(0, total_ets - n_keep)
+            end = total_ets
+
+        retained = list(range(start, end))
+        if center_et not in retained:
+            raise ValueError(f"Center ET {center_et} not in retained ETs: {retained}")
+
+        self.logger(f"Retained echo trains: {retained}")
+        return retained
+    
+
+    def _select_et_fold(self, retained_ets: List[int], center_et: int, fold_idx: int) -> List[int]:
+        """
+        Select which echo train(s) to drop for a given fold.
+
+        For acc=1: disjoint pairs (excluding center ET).
+        For acc>1: single leave-one-out drop from retained ETs (excluding center ET).
+
+        Parameters
+        ----------
+        retained_ets : List[int]
+            List of retained echo train indices.
+        center_et : int
+            Echo train containing the center column.
+        fold_idx : int
+            Index of the fold variant to select (wrapped via modulo).
+
+        Returns
+        -------
+        List[int]
+            Echo train indices to drop for this fold.
+        """
+        if self.echo_train_acceleration == 1:
+            # Disjoint dropout pairs
+            pairs = []
+            i = 0
+            while i < len(retained_ets) - 1:
+                et1, et2 = retained_ets[i], retained_ets[i + 1]
+                if center_et in (et1, et2):
+                    i += 1
+                    continue
+                pairs.append([et1, et2])
+                i += 2
+            if not pairs:
+                raise ValueError("No valid echo-train dropout pairs (acc=1) excluding center ET.")
+            self.logger(f"Disjoint dropout pairs: {pairs}")
+            return pairs[fold_idx % len(pairs)]
+        else:
+            # Leave-one-out dropout
+            candidates = [et for et in retained_ets if et != center_et]
+            if not candidates:
+                raise ValueError("No ETs left to drop for LOO (acc>1) after excluding center ET.")
+            self.logger(f"Candidates for dropout: {candidates}")
+            self.logger(f"Fold idx modulo: {fold_idx % len(candidates)}^: fold_idx: {fold_idx} % len(candidates): {len(candidates)}")
+            return [candidates[fold_idx % len(candidates)]]
+
+
+    def _build_col_mask(self, summary_df: pd.DataFrame, ets_to_drop: List[int], ncols: int) -> np.ndarray:
+        """
+        Build a binary mask over columns: 1=retain, 0=drop.
+
+        Parameters
+        ----------
+        summary_df : pd.DataFrame
+            Echo-train summary with 'echo_train_idx' and 'col_indexes' columns.
+        ets_to_drop : List[int]
+            Echo-train indices to drop.
+        ncols : int
+            Number of k-space columns (from kspace.shape[-1]).
+
+        Returns
+        -------
+        np.ndarray
+            Boolean mask over k-space columns, shape (ncols,), dtype=bool.
+        """
+        col_mask = np.ones(ncols, dtype=bool)
+
+        for _, row in summary_df.iterrows():
+            if row["echo_train_idx"] in ets_to_drop:
+                cols = list(map(int, row["col_indexes"].split(",")))
+                col_mask[cols] = False
+
+        return col_mask
+
+
+    def _mask_kspace(self, kspace: np.ndarray, col_mask: np.ndarray) -> np.ndarray:
+        """
+        Zero out columns in k-space not marked as retained.
+
+        Parameters
+        ----------
+        kspace : np.ndarray
+            The 3D k-space array (coils, rows, cols).
+        col_mask : np.ndarray
+            Boolean array of shape (cols,), where False = drop.
+
+        Returns
+        -------
+        np.ndarray
+            K-space with selected columns zeroed out.
+        """
+        kspace[..., ~col_mask] = 0
+        return kspace
+
+
+    def perform_lxo_for_uq(self, kspace: np.ndarray, pat_id: str, slice_no: int, avg_idx: int=0) -> np.ndarray:
+
+        # 1. Fetch ET metadata from SQL for this slice (avg=0 assumed)
+        et_summary = self._fetch_et_summary(pat_id, slice_no, avg_idx=avg_idx)
+
+        # 2. Count total ETs and find the center ET
+        total_ets = self._count_et(et_summary)
+        center_et = self._find_center_et(ncols=kspace.shape[-1], et_summary=et_summary)
+
+        # 3. Select subset of retained ETs (acceleration logic)
+        retained_ets = self._select_retained_ets(total_ets, center_et, self.echo_train_acceleration)
+
+        # 4. Select ET(s) to drop for this fold
+        ets_to_drop = self._select_et_fold(retained_ets, fold_idx=self.echo_train_fold_idx)
+
+        # 5. Build a binary column mask (1=keep, 0=drop)
+        col_mask = self._build_col_mask(et_summary, ets_to_drop, kspace.shape[-1])
+
+        # 6. Apply the mask to k-space (in-place or copy)
+        kspace = self._mask_kspace(kspace, col_mask)
+        return kspace
 
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
@@ -355,6 +566,9 @@ class H5WithAvgsSliceData(Dataset):
             gaussian_id     = self.get_gaussian_id(pat_id, debug = True)
             empirical_noise = self.get_noise_coil_list_from_db(pat_id, debug = True)
             kspace          = self.apply_mult_gaussian_noise_to_measured_lines(kspace=kspace, empirical_noise=empirical_noise, noise_multiplier=self.noise_mult, seed=gaussian_id, debug=True)
+
+        if self.do_lxo_for_uq:
+            kspace = self.perform_lxo_for_uq(kspace, pat_id, slice_no)
 
         # TODO: Write a custom collate function which disables batching for certain keys
         sample = {
@@ -410,7 +624,7 @@ class H5WithAvgsSliceData(Dataset):
         """
         self.logger.info(f"QVL - self.acc_avg = {self.avg_acceleration}")
 
-        conn = connect(self.db_path)  # Assumes self.db_path is defined in the class.
+        conn = sqlite3.connect(self.db_path)  # Assumes self.db_path is defined in the class.
         cursor = conn.cursor()
         query = f"""
             SELECT recon_path, gaussian_id, avg_acceleration
@@ -515,6 +729,64 @@ class H5WithAvgsSliceData(Dataset):
         
         return sigma
 
+
+    def parse_noise_coils_list(self, noise_coils_list: str) -> np.ndarray:
+        """
+        Parse the noise_coils_list string into a numpy array of floats.
+        
+        Args:
+            noise_coils_list (str): Comma-separated string of floats.
+        
+        Returns:
+            np.ndarray: Array of floats.
+        """
+        # Split the string by commas and convert each element to a float.
+        noise_list = [float(val) for val in noise_coils_list.split(',')]
+        return np.array(noise_list)
+
+
+    def get_noise_coil_list_from_db(self, pat_id: str, debug = False) -> np.ndarray:
+
+        conn = sqlite3.connect(str(self.db_path))
+        c = conn.cursor()
+        query = "SELECT * FROM noise_estimation WHERE id = ?"
+        c.execute(query, (pat_id.strip(),))
+        _, _, _, _, noise_coils_list, _, _ = c.fetchone()
+        conn.close()
+
+        # The found noise is a  list of floats as a string, we need to parse it into a numpy array.
+        emperical_noise = self.parse_noise_coils_list(noise_coils_list)
+
+        # if debug: 
+        #     self.logger.info(f"\nemperical_noise = {emperical_noise}")
+
+        return emperical_noise
+
+
+    def apply_mult_gaussian_noise_to_measured_lines(self, kspace: np.ndarray, empirical_noise: np.ndarray, noise_multiplier: float, seed: int = None, debug=False) -> np.ndarray:
+        # Scale the baseline noise by the multiplier.
+        scaled_sigma = noise_multiplier * empirical_noise
+        if debug:
+            self.logger.info(f"Applying increased emperical noise per coil ... Noise multiplier {self.noise_mult}")
+        rng = np.random.default_rng(seed)
+
+        # Create a copy to hold the noisy k-space data.
+        noisy_kspace = kspace.copy()
+        coils, rows, cols = kspace.shape
+
+        for c in range(coils):
+            coil_data = noisy_kspace[c].copy()  # shape: (rows, cols)
+            # Find indices where the coil has measured (nonzero) data.
+            mask = np.nonzero(np.abs(coil_data) > 0)
+            if mask[0].size > 0:
+                n_measured = mask[0].size
+                # Generate complex Gaussian noise for these measured entries,
+                # scaled by the increased sigma for the current coil.
+                coil_data[mask] += scaled_sigma[c] * (rng.standard_normal(n_measured) + 1j * rng.standard_normal(n_measured))
+            noisy_kspace[c] = coil_data
+
+        return noisy_kspace
+    
 
     def get_slice_data(self, filename, slice_no, key="kspace", pass_attrs=False, extra_keys=None):
         avg1, avg2, avg3 = 0, 1, 2

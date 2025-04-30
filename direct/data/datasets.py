@@ -469,6 +469,9 @@ class FastMRIAvgCombDataset(H5WithAvgsSliceData):
         noise_mult: float                                = 2.5,
         db_path: Optional[str]                           = None,
         tablename: Optional[str]                         = None,
+        do_lxo_for_uq: bool                              = False,        # If True, apply fold_idx dropout for UQ
+        echo_train_acceleration: int                     = 1,            # Acceleration factor; 1 means no acceleration
+        echo_train_fold_idx: int                         = 0,            # Index of ET(s) to leave out from retained set
         **kwargs,
     ) -> None:
         # TODO: Clean up Dataset class such that only **kwargs need to get parsed.
@@ -481,24 +484,27 @@ class FastMRIAvgCombDataset(H5WithAvgsSliceData):
         # print(f"self.pass_mask: {self.pass_mask}") if DEBUG else None
 
         super().__init__(
-            root                   = data_root,
-            filenames_filter       = filenames_filter,
-            filenames_lists        = filenames_lists,
-            filenames_lists_root   = filenames_lists_root,
-            regex_filter           = regex_filter,
-            metadata               = None,
-            extra_keys             = tuple(extra_keys),
-            pass_attrs             = pass_max,
-            text_description       = kwargs.get("text_description", None),
-            pass_h5s               = pass_h5s,
-            pass_dictionaries      = kwargs.get("pass_dictionaries", None),
-            store_applied_acs_mask = store_applied_acs_mask,
-            avg_collapse_strat     = avg_collapse_strat,
-            avg_acceleration       = avg_acceleration,
-            add_gaussian_noise     = add_gaussian_noise,
-            noise_mult             = noise_mult,
-            db_path                = db_path,
-            tablename              = tablename,
+            root                    = data_root,
+            filenames_filter        = filenames_filter,
+            filenames_lists         = filenames_lists,
+            filenames_lists_root    = filenames_lists_root,
+            regex_filter            = regex_filter,
+            metadata                = None,
+            extra_keys              = tuple(extra_keys),
+            pass_attrs              = pass_max,
+            text_description        = kwargs.get("text_description", None),
+            pass_h5s                = pass_h5s,
+            pass_dictionaries       = kwargs.get("pass_dictionaries", None),
+            store_applied_acs_mask  = store_applied_acs_mask,
+            avg_collapse_strat      = avg_collapse_strat,
+            avg_acceleration        = avg_acceleration,
+            add_gaussian_noise      = add_gaussian_noise,
+            noise_mult              = noise_mult,
+            db_path                 = db_path,
+            tablename               = tablename,
+            do_lxo_for_uq           = do_lxo_for_uq,
+            echo_train_acceleration = echo_train_acceleration,
+            echo_train_fold_idx     = echo_train_fold_idx,
         )
         if self.sensitivity_maps is not None:
             raise NotImplementedError(
