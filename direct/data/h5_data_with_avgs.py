@@ -332,6 +332,7 @@ class H5WithAvgsSliceData(Dataset):
         ORDER BY avg_idx, echo_train_idx
         ;
         """
+        self.logger.info(f"Fetching echo‑train summary for patient={pat_id}, slice_idx={slice_idx}, avg_idx={avg_idx}.")
         try:
             with sqlite3.connect(db_file) as conn:
                 df = pd.read_sql_query(sql, conn, params=(pat_id, avg_idx, slice_idx))
@@ -343,14 +344,17 @@ class H5WithAvgsSliceData(Dataset):
                 f"No echo‑train summary found for patient={pat_id!r}, slice_idx={slice_idx}"
             )
 
-        self.logger(f"Echo‑train summary for {pat_id!r}, slice {slice_idx}:\n", df)
+        if False:        # i know we have id, avg_idx, echo_train_idx, col_indexes, sample_count
+            self.logger.info(f"Echo‑train summary for {pat_id}, slice {slice_idx}")
+            for _, row in df.iterrows(): # print very compact with logger
+                self.logger.info(f"{row['echo_train_idx']}: {row['col_indexes']} ({row['sample_count']})")
 
         return df
 
 
     def _count_et(self, summary_df: pd.DataFrame) -> int:
         """Return the number of distinct echo trains in the summary DataFrame."""
-        self.logger(f"Counting echo trains in summary DataFrame:\n{summary_df}")
+        self.logger.info(f"Counting echo trains in summary DataFrame:\n{summary_df}")
         return summary_df["echo_train_idx"].nunique()
 
 
@@ -376,12 +380,12 @@ class H5WithAvgsSliceData(Dataset):
             If no echo train contains the center column.
         """
         middle_col = ncols // 2
-        self.logger(f"Center column index is {middle_col}")
+        self.logger.info(f"Center column index is {middle_col}")
         
         for _, row in summary_df.iterrows():
             cols = list(map(int, row["col_indexes"].split(",")))
             if middle_col in cols:
-                self.logger(f"Found center column in echo train {row['echo_train_idx']}")
+                self.logger.info(f"Found center column in echo train {row['echo_train_idx']}")
                 return int(row["echo_train_idx"])
 
         raise ValueError(f"No echo train found containing center column {middle_col}")
@@ -410,7 +414,7 @@ class H5WithAvgsSliceData(Dataset):
 
         n_keep = (total_ets + 1) // acc
         half = n_keep // 2
-        self.logger(f"Retaining {n_keep} echo trains centered around {center_et} with half: {half}.")
+        self.logger.info(f"Retaining {n_keep} echo trains centered around {center_et} with half: {half}.")
 
         start = max(0, center_et - half)
         end = start + n_keep
@@ -422,7 +426,7 @@ class H5WithAvgsSliceData(Dataset):
         if center_et not in retained:
             raise ValueError(f"Center ET {center_et} not in retained ETs: {retained}")
 
-        self.logger(f"Retained echo trains: {retained}")
+        self.logger.info(f"Retained echo trains: {retained}")
         return retained
     
 
@@ -460,15 +464,15 @@ class H5WithAvgsSliceData(Dataset):
                 i += 2
             if not pairs:
                 raise ValueError("No valid echo-train dropout pairs (acc=1) excluding center ET.")
-            self.logger(f"Adjecent dropout pairs: {pairs}")
+            self.logger.info(f"Adjecent dropout pairs: {pairs}")
             return pairs[fold_idx % len(pairs)]
         else:
             # Leave-one-out dropout
             candidates = [et for et in retained_ets if et != center_et]
             if not candidates:
                 raise ValueError("No ETs left to drop for LOO (acc>1) after excluding center ET.")
-            self.logger(f"Candidates for dropout: {candidates}")
-            self.logger(f"Fold idx modulo: {fold_idx % len(candidates)}^: fold_idx: {fold_idx} % len(candidates): {len(candidates)}")
+            self.logger.info(f"Candidates for dropout: {candidates}")
+            self.logger.info(f"Fold idx modulo: {fold_idx % len(candidates)}^: fold_idx: {fold_idx} % len(candidates): {len(candidates)}")
             return [candidates[fold_idx % len(candidates)]]
 
 
@@ -497,8 +501,24 @@ class H5WithAvgsSliceData(Dataset):
                 cols = list(map(int, row["col_indexes"].split(",")))
                 col_mask[cols] = False
 
-        if not np.any(col_mask):
-            raise RuntimeError("All columns masked out — this would zero all k-space.")
+        # Check validity of the mask
+        n_kept = int(col_mask.sum())
+        n_dropped = ncols - n_kept
+
+        self.logger.info(f"[ET Dropout] Columns total: {ncols} | Kept: {n_kept} | Dropped: {n_dropped}")
+        self.logger.info(f"[ET Dropout] Dropped ETs: {ets_to_drop}")
+        self.logger.info(f"[ET Dropout] Dropped columns: {np.where(~col_mask)[0].tolist()}")
+        self.logger.info(f"Shape of col_mask: {col_mask.shape} | dtype: {col_mask.dtype}")
+        # for i in range(0, len(col_mask), 10):
+            # self.logger.info(f"col_mask[{i}:{i+10}] = {col_mask[i:i+10]}")
+
+        if n_kept == 0:
+            raise RuntimeError(
+                f"[ET Dropout ERROR] All {ncols} columns masked out. Dropped ETs = {ets_to_drop}. Check DB or config."
+            )
+
+        if n_dropped == 0:
+            self.logger.warning("[ET Dropout] No columns dropped — mask is fully True. Fold idx may be ineffective.")
 
         return col_mask
 
@@ -519,7 +539,7 @@ class H5WithAvgsSliceData(Dataset):
         np.ndarray
             K-space with selected columns zeroed out.
         """
-        kspace[..., ~col_mask] = 0
+        kspace[..., ~col_mask] = 0.0
         return kspace
 
 
@@ -530,19 +550,20 @@ class H5WithAvgsSliceData(Dataset):
 
         # 2. Count total ETs and find the center ET
         total_ets = self._count_et(et_summary)
-        center_et = self._find_center_et(ncols=kspace.shape[-1], et_summary=et_summary)
+        center_et = self._find_center_et(ncols=kspace.shape[-1], summary_df=et_summary)
 
         # 3. Select subset of retained ETs (acceleration logic)
         retained_ets = self._select_retained_ets(total_ets, center_et, self.echo_train_acceleration)
 
         # 4. Select ET(s) to drop for this fold
-        ets_to_drop = self._select_et_fold(retained_ets, fold_idx=self.echo_train_fold_idx)
+        ets_to_drop = self._select_et_fold(retained_ets, center_et=center_et, fold_idx=self.echo_train_fold_idx)
 
         # 5. Build a binary column mask (1=keep, 0=drop)
         col_mask = self._build_col_mask(et_summary, ets_to_drop, kspace.shape[-1])
 
         # 6. Apply the mask to k-space (in-place or copy)
         kspace = self._mask_kspace(kspace, col_mask)
+        
         return kspace
 
 
@@ -581,8 +602,12 @@ class H5WithAvgsSliceData(Dataset):
             "filename": str(filename),
             "slice_no": slice_no,
             "pat_id": pat_id,
-            "gaussian_id": gaussian_id if self.add_gaussian_noise else None,
+            "gaussian_id": gaussian_id if self.add_gaussian_noise else -1,
         }
+
+        for k, v in sample.items():
+            if v is None:
+                raise TypeError(f"Sample key '{k}' is None. Dataset collation will fail.")
 
         # If the sensitivity maps exist, load these
         if self.sensitivity_maps:
@@ -727,8 +752,8 @@ class H5WithAvgsSliceData(Dataset):
         sigma = fraction * max_vals
         
         if debug:
-            print(f"Per-coil maximum values: {max_vals}")
-            print(f"Computed noise sigma per coil: {sigma}")
+            self.logger.info(f"Per-coil maximum values: {max_vals}")
+            self.logger.info(f"Computed noise sigma per coil: {sigma}")
 
         assert sigma.shape[0] == kspace.shape[0], "sigma must have the same length as the number of coils"
         
@@ -825,9 +850,6 @@ class H5WithAvgsSliceData(Dataset):
                 acs_mask = np.zeros((ncoils, nx, ny, 2), dtype=bool)
                 acs_mask[:, :, ny // 2 - 51 : ny // 2 + 51, :] = True
                 curr_data_avg12 = np.stack((curr_data_avg12.real, curr_data_avg12.imag), axis=-1)
-                # print(f"QVL - curr_data_avg12.shape = {curr_data_avg12.shape}")
-                # print(f"QVL - curr_data_avg12.dtype = {curr_data_avg12.dtype}")
-                # print(f"QVL - acs_mask.shape = {acs_mask.shape}")
                 applied_mask = curr_data_avg12 * acs_mask
                 del curr_data_avg12
                 extra_data["applied_acs_mask"] = applied_mask

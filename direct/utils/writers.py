@@ -265,6 +265,18 @@ def process_patient_output(
     assert tablename is not None, "tablename must be provided."
     assert not (do_lxo_for_uq and added_gaussian_noise), \
         "Cannot apply both echo-train dropout and Gaussian noise simultaneously."
+    
+    if True:
+        logger.info(f"Modelname: {modelname}")
+        logger.info(f"Avg Acceleration: {avg_acc}")
+        logger.info(f"Output Key: {output_key}")
+        logger.info(f"Also Write NIfTI: {also_write_nifti}")
+        logger.info(f"Added Gaussian Noise: {added_gaussian_noise}")
+        logger.info(f"DB Path: {db_path}")
+        logger.info(f"Tablename: {tablename}")
+        logger.info(f"Do LXO for UQ: {do_lxo_for_uq}")
+        logger.info(f"Echo Train Fold Index: {echo_train_fold_idx}")
+        logger.info(f"Echo Train Acceleration: {echo_train_acceleration}")
 
     volume, target, _, filename, samp_mask, pat_id = patient_data
 
@@ -273,7 +285,7 @@ def process_patient_output(
     base_filename = filename.replace(".h5", "")
 
     if do_lxo_for_uq:
-        filename = f"{base_filename}_R{echo_train_acceleration}_fold{echo_train_fold_idx}.h5"
+        filename = f"{base_filename}_R{avg_acc}_lxofold{echo_train_fold_idx}.h5"
         gaussian_id = ""
     elif added_gaussian_noise:
         gaussian_id = get_gaussian_id(
@@ -305,7 +317,7 @@ def process_patient_output(
     if also_write_nifti:
         suffix = f"_R{int(avg_acc)}"
         if do_lxo_for_uq:
-            suffix += f"_fold{echo_train_fold_idx}"
+            suffix += f"_lxofold{echo_train_fold_idx}"
         elif added_gaussian_noise:
             suffix += f"_gaus{gaussian_id}"
 
@@ -331,7 +343,6 @@ def process_patient_output(
             f.attrs["echo_train_acceleration"] = echo_train_acceleration
 
     logger.info(f"Wrote H5 file: {h5_path}")
-
 
 
 def write_output_to_h5(
